@@ -1,0 +1,67 @@
+@startuml
+|Expert|
+start
+:Find event information\n(online or local source);
+:Write short paragraph\n(~2 sentences describing event);
+
+|Application|
+:Create new event item;
+
+|Expert|
+:Fill in event details:
+- Event title
+- Paragraph
+- Source
+- Event type (preset)
+- Other metadata;
+:Save event item;
+
+|Application|
+:Transform event item to RDF;
+:Send RDF data to AllegroGraph server;
+
+|AllegroGraph Server|
+:Store RDF triples;
+:Allow SPARQL querying of events;
+
+|Application|
+:Query events using SPARQL;
+if (Create report?) then (yes)
+
+  |Expert|
+  :Compile report;
+  :Save report;
+
+  |Application|
+  :Transform report to RDF;
+  :Send RDF data to AllegroGraph server;
+
+  |AllegroGraph Server|
+  :Store RDF triples;
+  :Allow SPARQL querying of reports;
+
+  |Application|
+  :Query reports using SPARQL;
+else (no)
+endif
+
+if (Export query content?) then (yes)
+  if (Report/Event?) then (Report)
+    :Export reports to PDF;
+  else (Event)
+    :Export events to:
+    - RDF
+    - Plaintext
+    - PDF
+    - Image;
+  endif
+  if (Share/Download?) then (Share)
+    :Share through:
+    - WhatsApp;
+  else (Download)
+    :Download to device;
+  endif
+endif
+
+stop
+@enduml

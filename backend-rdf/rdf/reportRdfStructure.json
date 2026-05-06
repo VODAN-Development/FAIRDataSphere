@@ -1,0 +1,825 @@
+{
+  "prefixes": {
+    "sitrep": "http://sitrep.example.org/ontology#",
+    "resource": "http://sitrep.example.org/resource/",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "geo": "http://www.w3.org/2003/01/geo/wgs84_pos#",
+    "gn": "http://www.geonames.org/ontology#",
+    "hds": "http://example.org/hds#",
+    "schema": "http://schema.org/",
+    "foaf": "http://xmlns.com/foaf/0.1/"
+  },
+  "classes": {
+    "report": "hds:SituationReport",
+    "reportItem": "hds:Situation",
+    "location": "hds:Location",
+    "organisation": "hds:Organisation",
+    "perpetrator": "hds:Perpetrator",
+    "person": "schema:Person",
+    "place": "schema:Place",
+    "victim": "hds:Victim"
+  },
+  "equivalentClasses": {
+    "location": "schema:Place",
+    "perpetrator": "schema:Person",
+    "victim": "schema:Person"
+  },
+  "uriTemplates": {
+    "report": "resource:Report_{reportNumber}",
+    "reportItem": "resource:ReportItem_{entryNumber}",
+    "location": "resource:Location_{id}",
+    "organisation": "resource:Organisation_{id}",
+    "perpetrator": "resource:Perpetrator_{id}",
+    "person": "resource:Person_{id}",
+    "place": "resource:Place_{id}",
+    "victim": "resource:Victim_{id}"
+  },
+  "reportItem": {
+    "idField": "entryNumber",
+    "fields": {
+      "entryNumber": {
+        "predicate": "sitrep:entryNumber",
+        "datatype": "xsd:integer",
+        "required": true,
+        "parse": "int",
+        "generated": true,
+        "label": "Entry Number",
+        "inputType": "number",
+        "previousPredicates": []
+      },
+      "createdAt": {
+        "predicate": "sitrep:createdAt",
+        "datatype": "xsd:dateTime",
+        "required": true,
+        "generated": true,
+        "label": "Created At",
+        "inputType": "datetime",
+        "previousPredicates": []
+      },
+      "updatedAt": {
+        "predicate": "hds:updatedAt",
+        "datatype": "xsd:dateTime",
+        "required": true,
+        "generated": true,
+        "label": "Updated At",
+        "inputType": "datetime",
+        "previousPredicates": []
+      },
+      "paragraph": {
+        "predicate": "sitrep:paragraph",
+        "required": true,
+        "label": "Paragraph",
+        "inputType": "textarea",
+        "previousPredicates": []
+      },
+      "dateOfEvent": {
+        "predicate": "hds:date",
+        "datatype": "xsd:date",
+        "required": true,
+        "label": "Date of Event",
+        "inputType": "date",
+        "previousPredicates": []
+      },
+      "source": {
+        "predicate": "hds:source",
+        "label": "Source",
+        "inputType": "text",
+        "previousPredicates": []
+      },
+      "eventType": {
+        "predicate": "sitrep:eventType",
+        "required": true,
+        "label": "Event Type",
+        "inputType": "select",
+        "objectType": "uri",
+        "options": {
+          "militaryConflict": {
+            "label": "Military conflict",
+            "value": "sitrep:MilitaryConflict",
+            "fields": {
+              "attakingForces": {
+                "predicate": "sitrep:attackingForces",
+                "label": "Attacking forces",
+                "previousPredicates": []
+              },
+              "defendingForces": {
+                "predicate": "sitrep:defendingForces",
+                "label": "Defending forces",
+                "previousPredicates": []
+              },
+              "weaponsUsed": {
+                "predicate": "sitrep:weaponsUsed",
+                "label": "Weapons used",
+                "previousPredicates": []
+              },
+              "mcDeaths": {
+                "predicate": "sitrep:deaths",
+                "datatype": "xsd:integer",
+                "label": "Deaths",
+                "inputType": "number",
+                "previousPredicates": []
+              },
+              "mcInjuries": {
+                "predicate": "sitrep:injuries",
+                "datatype": "xsd:integer",
+                "label": "Injuries",
+                "inputType": "number",
+                "previousPredicates": []
+              },
+              "mcDescription": {
+                "predicate": "hds:description",
+                "label": "Description",
+                "inputType": "textarea",
+                "previousPredicates": []
+              }
+            }
+          },
+          "humanRightsAbuses": {
+            "label": "Human rights abuses",
+            "value": "sitrep:HumanRightsAbuses",
+            "fields": {
+              "abusesReported": {
+                "predicate": "sitrep:abusesReported",
+                "label": "Human rights abuses reported",
+                "inputType": "textarea",
+                "previousPredicates": []
+              },
+              "hrDeaths": {
+                "predicate": "sitrep:deaths",
+                "datatype": "xsd:integer",
+                "label": "Deaths",
+                "inputType": "number",
+                "previousPredicates": []
+              },
+              "hrInjuries": {
+                "predicate": "sitrep:injuries",
+                "datatype": "xsd:integer",
+                "label": "Injuries",
+                "inputType": "number",
+                "previousPredicates": []
+              },
+              "hrallegedPerpetrators": {
+                "predicate": "hds:isPerpetratorOf",
+                "direction": "reverse",
+                "objectType": "uri",
+                "targetEntityType": "perpetrator",
+                "targetClass": "hds:Perpetrator",
+                "targetTemplate": "resource:Perpetrator_{id}",
+                "targetLabelField": "name",
+                "createEntityFromInput": true,
+                "allowMultiple": true,
+                "label": "Alleged perpetrators",
+                "inputType": "uri-list",
+                "previousPredicates": []
+              },
+              "hrvictimIdentity": {
+                "predicate": "hds:isVictimOf",
+                "direction": "reverse",
+                "objectType": "uri",
+                "targetEntityType": "victim",
+                "targetClass": "hds:Victim",
+                "targetTemplate": "resource:Victim_{id}",
+                "targetLabelField": "name",
+                "createEntityFromInput": true,
+                "allowMultiple": true,
+                "label": "Victim identity",
+                "inputType": "uri-list",
+                "previousPredicates": []
+              },
+              "hrnumberOfVictims": {
+                "predicate": "sitrep:numberOfVictims",
+                "datatype": "xsd:integer",
+                "label": "Number of victims",
+                "inputType": "number",
+                "previousPredicates": []
+              },
+              "hrDescription": {
+                "predicate": "hds:description",
+                "label": "Description",
+                "inputType": "textarea",
+                "previousPredicates": []
+              }
+            }
+          },
+          "humanitarionAndHealthCrisis": {
+            "label": "Humanitarian and health crisis",
+            "value": "sitrep:HumanitarionAndHealthCrisis",
+            "fields": {
+              "crisisType": {
+                "predicate": "sitrep:crisisType",
+                "label": "Type of crisis",
+                "inputType": "text",
+                "previousPredicates": []
+              },
+              "intermediateNeeds": {
+                "predicate": "hds:needs",
+                "label": "Intermediate needs",
+                "inputType": "textarea",
+                "previousPredicates": []
+              },
+              "affectedIndividuals": {
+                "predicate": "hds:affected",
+                "objectType": "uri",
+                "targetEntityType": "victim",
+                "targetClass": "hds:Victim",
+                "targetTemplate": "resource:Victim_{id}",
+                "targetLabelField": "name",
+                "createEntityFromInput": true,
+                "allowMultiple": true,
+                "label": "Affected individuals",
+                "inputType": "uri-list",
+                "previousPredicates": []
+              },
+              "identity": {
+                "predicate": "sitrep:identity",
+                "label": "Identity of affected individuals",
+                "inputType": "text",
+                "previousPredicates": []
+              },
+              "hcDeaths": {
+                "predicate": "sitrep:deaths",
+                "datatype": "xsd:integer",
+                "label": "Deaths",
+                "inputType": "number",
+                "previousPredicates": []
+              },
+              "hcInjuries": {
+                "predicate": "sitrep:injuries",
+                "datatype": "xsd:integer",
+                "label": "Injuries",
+                "inputType": "number",
+                "previousPredicates": []
+              },
+              "hcInvolvedParties": {
+                "predicate": "hds:involved",
+                "label": "Involved parties",
+                "inputType": "text-list",
+                "previousPredicates": []
+              },
+              "hcDescription": {
+                "predicate": "hds:description",
+                "label": "Description",
+                "inputType": "textarea",
+                "previousPredicates": []
+              }
+            }
+          },
+          "politicalDevelopment": {
+            "label": "Political development",
+            "value": "sitrep:PoliticalDevelopment",
+            "fields": {
+              "politicalType": {
+                "predicate": "sitrep:politicalType",
+                "label": "Type of political event",
+                "inputType": "text",
+                "previousPredicates": []
+              },
+              "pdInvolvedParties": {
+                "predicate": "hds:involved",
+                "label": "Involved parties",
+                "inputType": "text-list",
+                "previousPredicates": []
+              },
+              "outcome": {
+                "predicate": "sitrep:outcome",
+                "label": "Outcome",
+                "inputType": "textarea",
+                "previousPredicates": []
+              },
+              "pdDescription": {
+                "predicate": "hds:description",
+                "label": "Description",
+                "inputType": "textarea",
+                "previousPredicates": []
+              }
+            }
+          },
+          "economicIssue": {
+            "label": "Economic issue",
+            "value": "sitrep:EconomicIssue",
+            "fields": {
+              "economicType": {
+                "predicate": "sitrep:economicType",
+                "label": "Type of economic event",
+                "inputType": "text",
+                "previousPredicates": []
+              },
+              "economicAffectedPopulation": {
+                "predicate": "hds:affected",
+                "label": "Affected population",
+                "inputType": "textarea",
+                "previousPredicates": []
+              },
+              "governmentAction": {
+                "predicate": "sitrep:governmentAction",
+                "label": "Government action taken",
+                "inputType": "text-list",
+                "previousPredicates": []
+              },
+              "economicDescription": {
+                "predicate": "hds:description",
+                "label": "Description",
+                "inputType": "textarea",
+                "previousPredicates": []
+              }
+            }
+          },
+          "socialDevelopment": {
+            "label": "Social development",
+            "value": "sitrep:SocialDevelopment",
+            "fields": {
+              "socialType": {
+                "predicate": "sitrep:socialType",
+                "label": "Type of social event",
+                "inputType": "text",
+                "previousPredicates": []
+              },
+              "sdInvolvedPartiess": {
+                "predicate": "hds:involved",
+                "label": "Involved parties",
+                "inputType": "text-list",
+                "previousPredicates": []
+              },
+              "socialDescription": {
+                "predicate": "hds:description",
+                "label": "Description",
+                "inputType": "textarea",
+                "previousPredicates": []
+              }
+            }
+          },
+          "environmentIssue": {
+            "label": "Environment issue",
+            "value": "sitrep:EnvironmentIssue",
+            "fields": {
+              "environmentType": {
+                "predicate": "sitrep:environmentType",
+                "label": "Type of environmental event",
+                "inputType": "text",
+                "previousPredicates": []
+              },
+              "environmentaffectedPopulation": {
+                "predicate": "hds:affected",
+                "label": "Affected population",
+                "inputType": "textarea",
+                "previousPredicates": []
+              },
+              "environmentDescription": {
+                "predicate": "hds:description",
+                "label": "Description",
+                "inputType": "textarea",
+                "previousPredicates": []
+              }
+            }
+          },
+          "internationalResponse": {
+            "label": "International response or event",
+            "value": "sitrep:InternationalResponse",
+            "fields": {
+              "responseType": {
+                "predicate": "sitrep:responseType",
+                "label": "Type of event",
+                "inputType": "text",
+                "previousPredicates": []
+              },
+              "involvedGovernments": {
+                "predicate": "hds:involved",
+                "label": "Involved governments",
+                "inputType": "text-list",
+                "previousPredicates": []
+              },
+              "involvedOrganisations": {
+                "predicate": "hds:involved",
+                "objectType": "uri",
+                "targetEntityType": "organisation",
+                "targetClass": "hds:Organisation",
+                "targetTemplate": "resource:Organisation_{id}",
+                "targetLabelField": "name",
+                "createEntityFromInput": true,
+                "allowMultiple": true,
+                "label": "Involved international organizations",
+                "inputType": "uri-list",
+                "previousPredicates": []
+              },
+              "irInvolvedParties": {
+                "predicate": "hds:involved",
+                "label": "Other involved parties",
+                "inputType": "text-list",
+                "previousPredicates": []
+              },
+              "responseDescription": {
+                "predicate": "hds:description",
+                "label": "Description",
+                "inputType": "textarea",
+                "previousPredicates": []
+              }
+            }
+          },
+          "humanTrafficking": {
+            "label": "Human trafficking/smuggling/deportation",
+            "value": "sitrep:HumanTrafficking",
+            "fields": {
+              "traffickingType": {
+                "predicate": "sitrep:traffickingType",
+                "label": "Type of trafficking event",
+                "inputType": "text",
+                "previousPredicates": []
+              },
+              "abusesMentioned": {
+                "predicate": "sitrep:abusesMentioned",
+                "label": "Human rights abuses mentioned",
+                "inputType": "textarea",
+                "previousPredicates": []
+              },
+              "htvictimIdentity": {
+                "predicate": "hds:isVictimOf",
+                "direction": "reverse",
+                "objectType": "uri",
+                "targetEntityType": "victim",
+                "targetClass": "hds:Victim",
+                "targetTemplate": "resource:Victim_{id}",
+                "targetLabelField": "name",
+                "createEntityFromInput": true,
+                "allowMultiple": true,
+                "label": "Identity of victims",
+                "inputType": "uri-list",
+                "previousPredicates": []
+              },
+              "htnumberOfVictims": {
+                "predicate": "sitrep:numberOfVictims",
+                "datatype": "xsd:integer",
+                "label": "Number of victims",
+                "inputType": "number",
+                "previousPredicates": []
+              },
+              "traffickingDescription": {
+                "predicate": "hds:description",
+                "label": "Description",
+                "inputType": "textarea",
+                "previousPredicates": []
+              }
+            }
+          },
+          "mediaTargeting": {
+            "label": "Targeting of media/propaganda",
+            "value": "sitrep:MediaTargeting",
+            "fields": {
+              "targetingType": {
+                "predicate": "sitrep:targetingType",
+                "label": "Type of targeting event",
+                "inputType": "text",
+                "previousPredicates": []
+              },
+              "tmallegedPerpetrators": {
+                "predicate": "hds:isPerpetratorOf",
+                "direction": "reverse",
+                "objectType": "uri",
+                "targetEntityType": "perpetrator",
+                "targetClass": "hds:Perpetrator",
+                "targetTemplate": "resource:Perpetrator_{id}",
+                "targetLabelField": "name",
+                "createEntityFromInput": true,
+                "allowMultiple": true,
+                "label": "Alleged perpetrators",
+                "inputType": "uri-list",
+                "previousPredicates": []
+              },
+              "targetedMedia": {
+                "predicate": "sitrep:targetedMedia",
+                "label": "Targeted media",
+                "inputType": "text-list",
+                "previousPredicates": []
+              },
+              "mediaTargetingDescription": {
+                "predicate": "hds:description",
+                "label": "Description",
+                "inputType": "textarea",
+                "previousPredicates": []
+              }
+            }
+          }
+        },
+        "previousPredicates": []
+      }
+    },
+    "arrays": {
+      "countries": {
+        "predicate": "sitrep:country",
+        "objectType": "uri",
+        "vocabulary": "geonames",
+        "targetEntityType": "location",
+        "targetField": "country",
+        "required": true,
+        "label": "Countries",
+        "inputType": "uri-list",
+        "previousPredicates": []
+      },
+      "regions": {
+        "predicate": "sitrep:region",
+        "objectType": "uri",
+        "vocabulary": "geonames",
+        "targetEntityType": "location",
+        "targetField": "region",
+        "label": "Regions",
+        "inputType": "uri-list",
+        "previousPredicates": []
+      },
+      "villagesCities": {
+        "predicate": "sitrep:settlement",
+        "previousPredicates": [
+          "sitrep:villageCity"
+        ],
+        "objectType": "uri",
+        "vocabulary": "geonames",
+        "targetEntityType": "location",
+        "targetField": "settlement",
+        "required": false,
+        "label": "Settlements",
+        "inputType": "uri-list"
+      }
+    },
+    "nested": {
+      "exactLocation": {
+        "inputType": "location",
+        "predicate": "sitrep:coordinates",
+        "resourceMode": "per-instance",
+        "label": "Exact location",
+        "previousPredicates": [
+          "sitrep:exactLocation"
+        ],
+        "className": "hds:Location",
+        "targetEntityType": "location",
+        "targetField": "coordinates",
+        "lat": {
+          "predicate": "geo:lat",
+          "datatype": "xsd:decimal",
+          "label": "Latitude",
+          "previousPredicates": []
+        },
+        "lon": {
+          "predicate": "geo:long",
+          "datatype": "xsd:decimal",
+          "label": "Longitude",
+          "previousPredicates": []
+        }
+      }
+    },
+    "fieldOrder": [
+      "paragraph",
+      "dateOfEvent",
+      "countries",
+      "regions",
+      "villagesCities",
+      "exactLocation",
+      "source",
+      "eventType"
+    ]
+  },
+  "report": {
+    "idField": "reportNumber",
+    "fields": {
+      "reportNumber": {
+        "predicate": "hds:number",
+        "datatype": "xsd:integer",
+        "required": true,
+        "parse": "int",
+        "generated": true,
+        "label": "Report Number",
+        "inputType": "number"
+      },
+      "title": {
+        "predicate": "sitrep:title",
+        "required": true,
+        "label": "Report Title",
+        "inputType": "text",
+        "previousPredicates": []
+      },
+      "reportDate": {
+        "predicate": "hds:date",
+        "datatype": "xsd:date",
+        "required": true,
+        "label": "Report Date",
+        "inputType": "date",
+        "previousPredicates": []
+      },
+      "createdAt": {
+        "predicate": "sitrep:createdAt",
+        "datatype": "xsd:dateTime",
+        "required": true,
+        "generated": true,
+        "label": "Created At",
+        "inputType": "datetime",
+        "previousPredicates": []
+      }
+    },
+    "fieldOrder": [
+      "title",
+      "reportDate"
+    ],
+    "selectedItems": {
+      "predicate": "sitrep:hasReportItem",
+      "objectType": "uri",
+      "targetTemplate": "resource:ReportItem_{entryNumber}"
+    }
+  },
+  "location": {
+    "idField": "id",
+    "fields": {
+      "id": {
+        "predicate": "sitrep:locationId",
+        "datatype": "xsd:integer",
+        "required": true,
+        "parse": "int",
+        "generated": true,
+        "label": "ID",
+        "inputType": "number",
+        "previousPredicates": []
+      },
+      "name": {
+        "predicate": "hds:name",
+        "required": true,
+        "datatype": "xsd:string",
+        "label": "Name",
+        "inputType": "text",
+        "previousPredicates": []
+      },
+      "country": {
+        "predicate": "sitrep:country",
+        "objectType": "uri",
+        "vocabulary": "geonames",
+        "label": "Country",
+        "inputType": "uri-list",
+        "previousPredicates": []
+      },
+      "region": {
+        "predicate": "sitrep:region",
+        "objectType": "uri",
+        "vocabulary": "geonames",
+        "label": "Region",
+        "inputType": "uri-list",
+        "previousPredicates": []
+      },
+      "settlement": {
+        "predicate": "sitrep:settlement",
+        "objectType": "uri",
+        "vocabulary": "geonames",
+        "label": "Settlement",
+        "inputType": "uri-list",
+        "previousPredicates": []
+      }
+    },
+    "nested": {
+      "coordinates": {
+        "label": "Coordinates",
+        "predicate": "sitrep:coordinates",
+        "inputType": "location",
+        "lat": {
+          "predicate": "geo:lat",
+          "variable": "lat",
+          "datatype": "xsd:decimal",
+          "label": "Latitude",
+          "previousPredicates": []
+        },
+        "lon": {
+          "predicate": "geo:long",
+          "variable": "lon",
+          "datatype": "xsd:decimal",
+          "label": "Longitude",
+          "previousPredicates": []
+        },
+        "resourceMode": "per-instance",
+        "previousPredicates": []
+      }
+    },
+    "fieldOrder": [
+      "country",
+      "region",
+      "settlement",
+      "coordinates",
+      "name"
+    ]
+  },
+  "organisation": {
+    "idField": "id",
+    "fields": {
+      "id": {
+        "predicate": "sitrep:organisationId",
+        "datatype": "xsd:integer",
+        "required": true,
+        "parse": "int",
+        "generated": true,
+        "label": "ID",
+        "inputType": "number",
+        "previousPredicates": []
+      },
+      "name": {
+        "predicate": "hds:name",
+        "required": true,
+        "datatype": "xsd:string",
+        "label": "Name",
+        "inputType": "text",
+        "previousPredicates": []
+      }
+    },
+    "fieldOrder": []
+  },
+  "perpetrator": {
+    "idField": "id",
+    "fields": {
+      "id": {
+        "predicate": "sitrep:perpetratorId",
+        "datatype": "xsd:integer",
+        "required": true,
+        "parse": "int",
+        "generated": true,
+        "label": "ID",
+        "inputType": "number",
+        "previousPredicates": []
+      },
+      "name": {
+        "predicate": "hds:name",
+        "required": true,
+        "datatype": "xsd:string",
+        "label": "Name",
+        "inputType": "text",
+        "previousPredicates": []
+      }
+    },
+    "fieldOrder": []
+  },
+  "person": {
+    "idField": "id",
+    "fields": {
+      "id": {
+        "predicate": "sitrep:personId",
+        "datatype": "xsd:integer",
+        "required": true,
+        "parse": "int",
+        "generated": true,
+        "label": "ID",
+        "inputType": "number",
+        "previousPredicates": []
+      },
+      "name": {
+        "predicate": "hds:name",
+        "required": true,
+        "datatype": "xsd:string",
+        "label": "Name",
+        "inputType": "text",
+        "previousPredicates": []
+      }
+    },
+    "fieldOrder": []
+  },
+  "place": {
+    "idField": "id",
+    "fields": {
+      "id": {
+        "predicate": "sitrep:placeId",
+        "datatype": "xsd:integer",
+        "required": true,
+        "parse": "int",
+        "generated": true,
+        "label": "ID",
+        "inputType": "number",
+        "previousPredicates": []
+      },
+      "name": {
+        "predicate": "hds:name",
+        "required": true,
+        "datatype": "xsd:string",
+        "label": "Name",
+        "inputType": "text",
+        "previousPredicates": []
+      }
+    },
+    "fieldOrder": []
+  },
+  "victim": {
+    "idField": "id",
+    "fields": {
+      "id": {
+        "predicate": "sitrep:victimId",
+        "datatype": "xsd:integer",
+        "required": true,
+        "parse": "int",
+        "generated": true,
+        "label": "ID",
+        "inputType": "number",
+        "previousPredicates": []
+      },
+      "name": {
+        "predicate": "hds:name",
+        "required": true,
+        "datatype": "xsd:string",
+        "label": "Name",
+        "inputType": "text",
+        "previousPredicates": []
+      }
+    },
+    "fieldOrder": []
+  }
+}
