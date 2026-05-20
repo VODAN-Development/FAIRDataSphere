@@ -6,14 +6,6 @@
     reverse_proxy backend:4000
 }
 
-{$APP_DOMAIN} {
-    reverse_proxy frontend:80
-}
-
-{$API_DOMAIN} {
-    reverse_proxy backend:4000
-}
-
 {$AGRAPH_DOMAIN} {
     reverse_proxy allegrograph:10035
 }
