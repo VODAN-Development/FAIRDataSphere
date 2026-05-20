@@ -1,3 +1,13 @@
+# Dependencies
+node_modules/
+
+# Builds and caches
+dist/
+dist-ssr/
+coverage/
+.cache/
+.vite/
+
 # Logs
 logs
 *.log
@@ -7,22 +17,62 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+hck
+hck.pub
 *.local
+*.secret
+*.secrets
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.csr
+*.cert
+*.keystore
+*.jks
+secrets/
+credentials/
+
+# Runtime app data
+backend-rdf/data/*.json
+!backend-rdf/data/*.example.json
+backend-rdf/rdf/reportRdfStructure.json
+
+# RDF/data exports and local databases
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.bak
+*.backup
+*.ttl
+*.trig
+*.nt
+*.nq
+*.rdf
+exports/
+backups/
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+~$*
 
 # Misc
+.files/
 data pipeline.odt
 notes.txt

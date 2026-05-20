@@ -1,0 +1,10 @@
+node_modules
+dist
+dist-ssr
+coverage
+.cache
+.vite
+npm-debug.log*
+.env
+.env.*
+!.env.example

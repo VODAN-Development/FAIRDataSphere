@@ -1,19 +1,18 @@
 import { useState } from 'react';
-import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth.js';
 
-export default function Login() {
-  const { user, signIn } = useAuth();
-  const location = useLocation();
+export default function SignUp() {
+  const { user, signUp } = useAuth();
   const navigate = useNavigate();
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const redirectTo = location.state?.from?.pathname || '/reports';
 
   if (user) {
-    return <Navigate to={redirectTo} replace />;
+    return <Navigate to="/reports" replace />;
   }
 
   async function handleSubmit(event) {
@@ -22,8 +21,8 @@ export default function Login() {
     setSubmitting(true);
 
     try {
-      await signIn({ email, password });
-      navigate(redirectTo, { replace: true });
+      await signUp({ email, password, name });
+      navigate('/reports', { replace: true });
     } catch (submissionError) {
       setError(submissionError.message);
     } finally {
@@ -34,8 +33,18 @@ export default function Login() {
   return (
     <main className="auth-page">
       <form className="auth-form" onSubmit={handleSubmit}>
-        <h2>Sign in</h2>
+        <h2>Create account</h2>
         {error && <div className="error-message">{error}</div>}
+
+        <label className="form-group">
+          Name
+          <input
+            type="text"
+            autoComplete="name"
+            value={name}
+            onChange={event => setName(event.target.value)}
+          />
+        </label>
 
         <label className="form-group">
           Email
@@ -52,19 +61,20 @@ export default function Login() {
           Password
           <input
             type="password"
-            autoComplete="current-password"
+            autoComplete="new-password"
             value={password}
             onChange={event => setPassword(event.target.value)}
+            minLength={8}
             required
           />
         </label>
 
         <button type="submit" disabled={submitting}>
-          {submitting ? 'Signing in...' : 'Sign in'}
+          {submitting ? 'Creating account...' : 'Create account'}
         </button>
 
         <p className="auth-switch">
-          Need an account? <Link to="/signup">Create one</Link>
+          Already have an account? <Link to="/login">Sign in</Link>
         </p>
       </form>
     </main>
