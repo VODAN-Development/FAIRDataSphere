@@ -1,5 +1,7 @@
 # Dependencies
 node_modules/
+backend-rdf\node_modules\
+sitrep-app\node_modules\
 
 # Builds and caches
 dist/
@@ -73,6 +75,6 @@ Thumbs.db
 ~$*
 
 # Misc
-.files/
+files/
 data pipeline.odt
 notes.txt
