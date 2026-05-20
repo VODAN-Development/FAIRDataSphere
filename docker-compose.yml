@@ -17,6 +17,20 @@ services:
       backend:
         condition: service_healthy
 
+  allegrograph:
+    image: franzinc/agraph:v8.5.0
+    restart: unless-stopped
+    environment:
+      AGRAPH_SUPER_USER: ${ALLEGRO_USERNAME}
+      AGRAPH_SUPER_PASSWORD: ${ALLEGRO_PASSWORD}
+    shm_size: 2g
+    volumes:
+      - allegrograph_data:/agraph/data
+    expose:
+      - "10035"
+    ports:
+      - "127.0.0.1:10035:10035"
+
   backend:
     build:
       context: ./backend-rdf
@@ -27,6 +41,9 @@ services:
       - ./backend-rdf/data:/app/data
     expose:
       - "4000"
+    depends_on:
+      allegrograph:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 30s
@@ -47,5 +64,6 @@ services:
         condition: service_healthy
 
 volumes:
+  allegrograph_data:
   caddy_data:
   caddy_config:
