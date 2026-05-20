@@ -18,7 +18,7 @@ services:
         condition: service_healthy
 
   allegrograph:
-    image: franzinc/agraph:v8.5.0
+    image: franzinc/agraph:v9.1.0.t2
     restart: unless-stopped
     environment:
       AGRAPH_SUPER_USER: ${ALLEGRO_USERNAME}
