@@ -40,6 +40,7 @@ hck.pub
 *.jks
 secrets/
 credentials/
+ssh/
 
 # Runtime app data
 backend-rdf/data/*.json
