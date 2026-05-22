@@ -30,6 +30,7 @@ import {
   entityIdReplacePattern,
   entityIdReplacePatternForStructure,
   entityIdFromUri,
+  entityTemplateValues,
   entityUri,
   expandPrefixedName,
   fieldPatterns,
@@ -528,7 +529,6 @@ async function rdfEntitiesForType(entityType, organisationId, context) {
     SELECT ?entity ${variables}
     WHERE {
       ?entity rdf:type ${RDF.classes[entityType]} .
-      ${organisationDataPattern("?entity", organisationId)}
       ${fieldPatterns("?entity", fields)}
     }
     ORDER BY STR(?entity)
@@ -563,6 +563,41 @@ function subjectFromEntityIdentifier(entityType, id, uri) {
 function organisationDataTriple(subject, organisationId) {
   if (!organisationId) return "";
   return triple(subject, "sitrep:organisationId", organisationId);
+}
+
+function createdInputOrganisationTriples(entityType, data, organisationId) {
+  if (!organisationId) return "";
+  return createdInputOrganisationTriplesForFields(RDF[entityType]?.fields || {}, data, organisationId);
+}
+
+function createdInputOrganisationTriplesForFields(fields, data = {}, organisationId) {
+  return Object.entries(fields || {})
+    .flatMap(([fieldName, field]) => {
+      if (!field || typeof field !== "object") return [];
+      if (isGroupField(field)) {
+        return [createdInputOrganisationTriplesForFields(field, data[fieldName] || {}, organisationId)];
+      }
+      if (field.options) {
+        const conditionalValue = data[fieldName];
+        const selectedOption = typeof conditionalValue === "object" ? conditionalValue?.selectedOption : conditionalValue;
+        const option = field.options?.[selectedOption];
+        return option
+          ? [createdInputOrganisationTriplesForFields(option.fields || {}, conditionalValue?.values || {}, organisationId)]
+          : [];
+      }
+      if (!field.createEntityFromInput || !field.targetEntityType) return [];
+
+      const values = Array.isArray(data[fieldName]) ? data[fieldName] : [data[fieldName]];
+      return values
+        .filter(value => value && typeof value === "object" && value.id !== undefined && !value.uri)
+        .map(value => {
+          const template = field.targetTemplate || RDF.uriTemplates?.[field.targetEntityType];
+          if (!template) return "";
+          const subject = applyTemplate(template, entityTemplateValues(field.targetEntityType, value.id));
+          return organisationDataTriple(subject, organisationId);
+        });
+    })
+    .join("");
 }
 
 function organisationDataPattern(subject, organisationId) {
@@ -1574,6 +1609,7 @@ const resolvers = {
       await runSparqlUpdate(`${PREFIXES} INSERT DATA {
         ${reportItemTriples(item)}
         ${organisationDataTriple(entityUri("reportItem", entryNumber), organisationId)}
+        ${createdInputOrganisationTriples("reportItem", item, organisationId)}
       }`);
       return item;
       });
@@ -1610,6 +1646,7 @@ const resolvers = {
       await runSparqlUpdate(`${PREFIXES} INSERT DATA {
         ${reportItemTriples(item)}
         ${organisationDataTriple(subject, organisationId)}
+        ${createdInputOrganisationTriples("reportItem", item, organisationId)}
       }`);
       return item;
       });
@@ -1651,6 +1688,7 @@ const resolvers = {
       await runSparqlUpdate(`${PREFIXES} INSERT DATA {
         ${reportTriples(report)}
         ${organisationDataTriple(entityUri("report", id), organisationId)}
+        ${createdInputOrganisationTriples("report", report, organisationId)}
       }`);
 
       for (const itemId of selectedItemIds || []) {
@@ -1702,6 +1740,7 @@ const resolvers = {
       await runSparqlUpdate(`${PREFIXES} INSERT DATA {
         ${reportTriples(report)}
         ${organisationDataTriple(subject, organisationId)}
+        ${createdInputOrganisationTriples("report", report, organisationId)}
       }`);
 
       for (const itemId of nextSelectedItemIds) {
@@ -1801,6 +1840,7 @@ const resolvers = {
       await runSparqlUpdate(`${PREFIXES} INSERT DATA {
         ${triples}
         ${organisationDataTriple(subject, organisationId)}
+        ${createdInputOrganisationTriples(entityType, data, organisationId)}
       }`);
 
       return rdfEntityFromObject(entityType, { ...data, uri: expandPrefixedName(subject) });
