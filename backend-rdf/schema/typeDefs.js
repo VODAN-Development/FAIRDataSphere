@@ -26,6 +26,10 @@ export default `#graphql
     repository: String
     repositoryUsername: String
     repositoryPassword: String
+    repositoryReadUsername: String
+    repositoryReadPassword: String
+    joinRequiresPassword: Boolean!
+    joinPassword: String
     currentUserRole: String
     members: [OrganisationMember!]!
   }
@@ -123,8 +127,9 @@ export default `#graphql
     updateMyAccount(email: String!, name: String): User!
     updateMyPassword(currentPassword: String!, newPassword: String!): Boolean!
     createOrganisation(name: String!, description: String): Organisation!
-    joinOrganisation(id: ID!): Organisation!
-    updateOrganisation(id: ID!, name: String!, description: String): Organisation!
+    joinOrganisation(id: ID!, password: String): Organisation!
+    leaveOrganisation(id: ID!): Boolean!
+    updateOrganisation(id: ID!, name: String!, description: String, joinRequiresPassword: Boolean!): Organisation!
     updateOrganisationMemberRole(organisationId: ID!, userId: ID!, role: String!): Organisation!
     deleteOrganisation(id: ID!): Boolean!
 

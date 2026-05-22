@@ -83,7 +83,7 @@ export async function deleteRepository(repository) {
   await assertDeleteOk(response, `Delete repository ${repository}`);
 }
 
-export async function createRepositoryUser({ username, password, repository }) {
+export async function createRepositoryUser({ username, password, repository, write = true }) {
   const userParams = new URLSearchParams({ password });
   const userResponse = await fetch(`${ALLEGRO_BASE_URL}/users/${encodeURIComponent(username)}?${userParams}`, {
     method: "PUT",
@@ -93,7 +93,7 @@ export async function createRepositoryUser({ username, password, repository }) {
 
   const accessParams = new URLSearchParams({
     read: "true",
-    write: "true",
+    write: write ? "true" : "false",
     catalog: DEFAULT_CATALOG,
     repository,
   });

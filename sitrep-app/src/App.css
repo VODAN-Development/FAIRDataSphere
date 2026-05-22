@@ -113,6 +113,10 @@
   border-bottom: 1px solid var(--color-border-soft);
 }
 
+.home-dashboard-header {
+  flex-wrap: wrap;
+}
+
 .home-dashboard-hero {
   align-items: flex-start;
   flex-direction: column;
@@ -129,6 +133,34 @@
 .home-dashboard-hero p {
   margin: 0.35rem 0 0;
   color: var(--color-on-surface-muted);
+}
+
+.home-dashboard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: end;
+  gap: 0.75rem;
+}
+
+.home-organisation-selector {
+  display: grid;
+  gap: 0.3rem;
+  min-width: min(16rem, 100%);
+  color: var(--color-on-surface);
+  font-weight: 700;
+}
+
+.home-organisation-selector select {
+  width: 100%;
+  min-height: 2.25rem;
+  box-sizing: border-box;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--color-disabled);
+  border-radius: 4px;
+  background-color: var(--color-surface);
+  color: var(--color-on-surface);
+  font: inherit;
 }
 
 .home-primary-action,
@@ -701,6 +733,24 @@ nav a button {
   color: var(--color-primary);
 }
 
+.organisation-access-button {
+  min-height: 2.35rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--color-secondary);
+  border-radius: 6px;
+  background-color: var(--color-surface);
+  color: var(--color-secondary);
+  cursor: pointer;
+  font-weight: 700;
+  text-align: left;
+}
+
+.organisation-access-button:hover,
+.organisation-access-button.active {
+  background-color: var(--color-secondary);
+  color: var(--color-on-secondary);
+}
+
 .organisation-detail-pane {
   display: grid;
   align-content: start;
@@ -756,6 +806,19 @@ nav a button {
   border: 1px solid var(--color-border-muted);
   border-radius: 8px;
   background-color: var(--color-surface-raised);
+}
+
+.organisation-private-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--color-on-surface);
+}
+
+.organisation-private-toggle input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
 }
 
 .organisation-form {
@@ -978,6 +1041,14 @@ nav a button {
 .organisation-join-list {
   display: grid;
   gap: 0.75rem;
+}
+
+.organisation-join-search {
+  margin: 0;
+}
+
+.organisation-join-password {
+  margin-top: 0.65rem;
 }
 
 .organisation-join-row {

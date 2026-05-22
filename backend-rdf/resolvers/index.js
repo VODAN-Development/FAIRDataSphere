@@ -8,6 +8,7 @@ import {
   createOrganisation,
   deleteOrganisation,
   joinOrganisation,
+  leaveOrganisation,
   listMyOrganisations,
   listOrganisations,
   organisationRdfStructureJson,
@@ -628,9 +629,12 @@ function scopedSubjectDelete(subject, organisationId) {
 
 function scopedReportLinkDelete(selectedItemsField, selectedItemObject, organisationId) {
   if (organisationId) {
-    return `DELETE WHERE {
-      ?report ${selectedItemsField.predicate} ${selectedItemObject} ;
-               sitrep:organisationId ${literal(organisationId)} .
+    return `DELETE {
+      ?report ${selectedItemsField.predicate} ${selectedItemObject} .
+    }
+    WHERE {
+      ?report ${selectedItemsField.predicate} ${selectedItemObject} .
+      ?report sitrep:organisationId ${literal(organisationId)} .
     }`;
   }
   return `DELETE {
@@ -1395,9 +1399,9 @@ const resolvers = {
   Query: {
     me: async (_, __, context) => context.currentUser,
 
-    organisations: async (_, __, context) => listOrganisations(context.currentUser.id),
+    organisations: async (_, __, context) => listOrganisations(context.currentUser),
 
-    myOrganisations: async (_, __, context) => listMyOrganisations(context.currentUser.id),
+    myOrganisations: async (_, __, context) => listMyOrganisations(context.currentUser),
 
     rdfStructure: async (_, { organisationId }, context) => {
       await requireOrganisationView(context, organisationId);
@@ -1556,14 +1560,19 @@ const resolvers = {
       return createOrganisation(user.id, { name, description });
     },
 
-    joinOrganisation: async (_, { id }, context) => {
+    joinOrganisation: async (_, { id, password }, context) => {
       const user = requireAuth(context);
-      return joinOrganisation(user.id, id);
+      return joinOrganisation(user.id, id, password);
     },
 
-    updateOrganisation: async (_, { id, name, description }, context) => {
+    leaveOrganisation: async (_, { id }, context) => {
       const user = requireAuth(context);
-      return updateOrganisation(user, id, { name, description });
+      return leaveOrganisation(user, id);
+    },
+
+    updateOrganisation: async (_, { id, name, description, joinRequiresPassword }, context) => {
+      const user = requireAuth(context);
+      return updateOrganisation(user, id, { name, description, joinRequiresPassword });
     },
 
     updateOrganisationMemberRole: async (_, { organisationId, userId, role }, context) => {
@@ -1923,6 +1932,7 @@ for (const [name, resolver] of Object.entries(resolvers.Mutation)) {
     const organisationMutations = new Set([
       "createOrganisation",
       "joinOrganisation",
+      "leaveOrganisation",
       "updateOrganisation",
       "updateOrganisationMemberRole",
       "deleteOrganisation",

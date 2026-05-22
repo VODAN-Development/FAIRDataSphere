@@ -1741,9 +1741,8 @@ function ClassPropertiesPane({ structure, selectedEntityType, entityTypes, onCha
   );
 }
 
-export default function RdfStructure() {
-  const { activeOrganisationId, activeOrganisationIsUnscoped } = useOrganisationContext();
-  const { data, loading, error } = useQuery(GET_RDF_STRUCTURE, {
+function RdfStructureEditor({ activeOrganisationId, activeOrganisationIsUnscoped }) {
+  const { data, loading, error, refetch } = useQuery(GET_RDF_STRUCTURE, {
     variables: { organisationId: activeOrganisationId },
     skip: !activeOrganisationId && !activeOrganisationIsUnscoped,
   });
@@ -1929,6 +1928,8 @@ export default function RdfStructure() {
       setMessage('');
       const nextStructure = buildStructure();
       await updateStructure({ variables: { json: JSON.stringify(nextStructure, null, 2), organisationId: activeOrganisationId } });
+      await refetch({ organisationId: activeOrganisationId });
+      setRawJson('');
       setEditableFieldNames({});
       setEditableClassNames([]);
       setMessage('RDF structure saved. Open pages will use the new structure after refetching.');
@@ -2058,5 +2059,18 @@ export default function RdfStructure() {
       </button>
     </div>
     </OrganisationGate>
+  );
+}
+
+export default function RdfStructure() {
+  const { activeOrganisationId, activeOrganisationIsUnscoped } = useOrganisationContext();
+  const editorKey = activeOrganisationIsUnscoped ? 'unscoped' : activeOrganisationId || 'no-organisation';
+
+  return (
+    <RdfStructureEditor
+      key={editorKey}
+      activeOrganisationId={activeOrganisationId}
+      activeOrganisationIsUnscoped={activeOrganisationIsUnscoped}
+    />
   );
 }

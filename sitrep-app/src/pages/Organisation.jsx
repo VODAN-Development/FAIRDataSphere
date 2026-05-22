@@ -13,6 +13,10 @@ const ORGANISATION_FIELDS = gql`
     repository
     repositoryUsername
     repositoryPassword
+    repositoryReadUsername
+    repositoryReadPassword
+    joinRequiresPassword
+    joinPassword
     currentUserRole
     members {
       role
@@ -49,8 +53,8 @@ const CREATE_ORGANISATION = gql`
 
 const JOIN_ORGANISATION = gql`
   ${ORGANISATION_FIELDS}
-  mutation JoinOrganisation($id: ID!) {
-    joinOrganisation(id: $id) {
+  mutation JoinOrganisation($id: ID!, $password: String) {
+    joinOrganisation(id: $id, password: $password) {
       ...OrganisationFields
     }
   }
@@ -58,8 +62,8 @@ const JOIN_ORGANISATION = gql`
 
 const UPDATE_ORGANISATION = gql`
   ${ORGANISATION_FIELDS}
-  mutation UpdateOrganisation($id: ID!, $name: String!, $description: String) {
-    updateOrganisation(id: $id, name: $name, description: $description) {
+  mutation UpdateOrganisation($id: ID!, $name: String!, $description: String, $joinRequiresPassword: Boolean!) {
+    updateOrganisation(id: $id, name: $name, description: $description, joinRequiresPassword: $joinRequiresPassword) {
       ...OrganisationFields
     }
   }
@@ -80,16 +84,23 @@ const DELETE_ORGANISATION = gql`
   }
 `;
 
+const LEAVE_ORGANISATION = gql`
+  mutation LeaveOrganisation($id: ID!) {
+    leaveOrganisation(id: $id)
+  }
+`;
+
 const EMPTY_ORGANISATIONS = [];
 const ACTIVE_ORGANISATION_KEY = 'sitrep.activeOrganisationId';
 
 function OrganisationSettings({ organisation, onSave, saving }) {
   const [name, setName] = useState(organisation.name);
   const [description, setDescription] = useState(organisation.description || '');
+  const [joinRequiresPassword, setJoinRequiresPassword] = useState(organisation.joinRequiresPassword);
 
   function handleSubmit(event) {
     event.preventDefault();
-    onSave(organisation.id, { name, description });
+    onSave(organisation.id, { name, description, joinRequiresPassword });
   }
 
   return (
@@ -102,6 +113,14 @@ function OrganisationSettings({ organisation, onSave, saving }) {
       <label className="form-group">
         Description
         <textarea value={description} onChange={event => setDescription(event.target.value)} rows="3" />
+      </label>
+      <label className="organisation-private-toggle">
+        <input
+          type="checkbox"
+          checked={joinRequiresPassword}
+          onChange={event => setJoinRequiresPassword(event.target.checked)}
+        />
+        Require a password to join
       </label>
       <button type="submit" disabled={saving}>
         {saving ? 'Saving...' : 'Save settings'}
@@ -117,6 +136,8 @@ export default function Organisation() {
   const [selectedOrganisationId, setSelectedOrganisationId] = useState('');
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
+  const [joinSearch, setJoinSearch] = useState('');
+  const [joinPasswords, setJoinPasswords] = useState({});
   const [message, setMessage] = useState('');
   const [formError, setFormError] = useState('');
   const [createOrganisation, { loading: creating }] = useMutation(CREATE_ORGANISATION, {
@@ -134,6 +155,9 @@ export default function Organisation() {
   const [deleteOrganisation, { loading: deletingOrganisation }] = useMutation(DELETE_ORGANISATION, {
     refetchQueries: ['GetOrganisations'],
   });
+  const [leaveOrganisation, { loading: leavingOrganisation }] = useMutation(LEAVE_ORGANISATION, {
+    refetchQueries: ['GetOrganisations'],
+  });
 
   const myOrganisations = data?.myOrganisations || EMPTY_ORGANISATIONS;
   const managedOrganisations = user?.role === 'admin'
@@ -141,16 +165,32 @@ export default function Organisation() {
     : myOrganisations;
   const joinedIds = useMemo(() => new Set(myOrganisations.map(organisation => organisation.id)), [myOrganisations]);
   const availableOrganisations = (data?.organisations || []).filter(organisation => !joinedIds.has(organisation.id));
+  const matchingAvailableOrganisations = availableOrganisations.filter(organisation => {
+    const search = joinSearch.trim().toLowerCase();
+    if (!search) return true;
+    return `${organisation.name} ${organisation.description || ''}`.toLowerCase().includes(search);
+  });
   const selectedOrganisation = managedOrganisations.find(organisation => organisation.id === selectedOrganisationId)
     || managedOrganisations[0]
     || null;
   const isOwner = selectedOrganisation
     ? user?.role === 'admin' || selectedOrganisation.currentUserRole === 'owner'
     : false;
+  const isMember = selectedOrganisation
+    ? isOwner || selectedOrganisation.currentUserRole === 'member'
+    : false;
+  const canViewJoinPassword = selectedOrganisation?.currentUserRole === 'owner';
+  const canViewOwnerRepositoryCredentials = user?.role === 'admin'
+    || selectedOrganisation?.currentUserRole === 'owner';
   const ownerCount = selectedOrganisation?.members.filter(member => member.role === 'owner').length || 0;
   const canDelete = selectedOrganisation
     ? user?.role === 'admin'
       || (selectedOrganisation.currentUserRole === 'owner' && ownerCount === 1)
+    : false;
+  const canLeave = selectedOrganisation
+    ? selectedOrganisation.currentUserRole === 'guest'
+      || selectedOrganisation.currentUserRole === 'member'
+      || (selectedOrganisation.currentUserRole === 'owner' && ownerCount > 1)
     : false;
   const roleLabel = selectedOrganisation
     ? user?.role === 'admin'
@@ -161,7 +201,6 @@ export default function Organisation() {
     { id: 'profile', label: 'Profile' },
     { id: 'role', label: 'Roles' },
     { id: 'password', label: 'Credentials' },
-    { id: 'access', label: 'Create / join' },
     { id: 'danger', label: 'Danger' },
   ];
 
@@ -185,7 +224,7 @@ export default function Organisation() {
     setFormError('');
 
     try {
-      await joinOrganisation({ variables: { id } });
+      await joinOrganisation({ variables: { id, password: joinPasswords[id] || null } });
       setMessage('Joined organisation.');
     } catch (submissionError) {
       setFormError(submissionError.message);
@@ -233,6 +272,26 @@ export default function Organisation() {
       setSelectedOrganisationId('');
       setActivePanel('profile');
       setMessage('Organisation deleted.');
+    } catch (submissionError) {
+      setFormError(submissionError.message);
+    }
+  }
+
+  async function handleLeaveOrganisation(organisation) {
+    setMessage('');
+    setFormError('');
+
+    const confirmed = window.confirm(`Leave "${organisation.name}"?`);
+    if (!confirmed) return;
+
+    try {
+      await leaveOrganisation({ variables: { id: organisation.id } });
+      if (localStorage.getItem(ACTIVE_ORGANISATION_KEY) === organisation.id) {
+        localStorage.removeItem(ACTIVE_ORGANISATION_KEY);
+      }
+      setSelectedOrganisationId('');
+      setActivePanel('profile');
+      setMessage('Left organisation.');
     } catch (submissionError) {
       setFormError(submissionError.message);
     }
@@ -303,8 +362,9 @@ export default function Organisation() {
         </div>
         <div className="organisation-members">
           {selectedOrganisation.members.map(member => {
-            const isProtectedOwner = user?.role !== 'admin'
-              && member.role === 'owner'
+            const canPromoteGuest = !isOwner
+              && selectedOrganisation.currentUserRole === 'member'
+              && member.role === 'guest'
               && member.user.id !== user.id;
             return (
               <div className="organisation-member-row" key={member.user.id}>
@@ -315,12 +375,21 @@ export default function Organisation() {
                 {isOwner ? (
                   <select
                     value={member.role}
-                    disabled={savingRole || isProtectedOwner}
+                    disabled={savingRole}
                     onChange={event => handleRoleChange(selectedOrganisation.id, member.user.id, event.target.value)}
                   >
                     <option value="owner">owner</option>
                     <option value="member">member</option>
                     <option value="guest">guest</option>
+                  </select>
+                ) : canPromoteGuest ? (
+                  <select
+                    value={member.role}
+                    disabled={savingRole}
+                    onChange={event => handleRoleChange(selectedOrganisation.id, member.user.id, event.target.value)}
+                  >
+                    <option value="guest">guest</option>
+                    <option value="member">member</option>
                   </select>
                 ) : (
                   <span className={`organisation-role ${member.role}`}>{member.role}</span>
@@ -343,11 +412,11 @@ export default function Organisation() {
       );
     }
 
-    if (!isOwner) {
+    if (!isMember) {
       return (
         <div className="rdf-empty-field-pane">
-          <h3>Password</h3>
-          <p>Only organisation owners can view repository access credentials.</p>
+          <h3>Credentials</h3>
+          <p>Only organisation members and owners can view repository access credentials.</p>
         </div>
       );
     }
@@ -355,7 +424,7 @@ export default function Organisation() {
     return (
       <section className="organisation-detail-section">
         <div className="rdf-editor-heading">
-          <h3>Password</h3>
+          <h3>Credentials</h3>
         </div>
         <div className="organisation-repository">
           <h4>Repository access</h4>
@@ -364,16 +433,51 @@ export default function Organisation() {
               <dt>Repository</dt>
               <dd>{selectedOrganisation.repository || 'Not provisioned yet'}</dd>
             </div>
+          </dl>
+        </div>
+        <div className="organisation-repository">
+          <h4>Member read-only access</h4>
+          <dl>
             <div>
               <dt>Username</dt>
-              <dd>{selectedOrganisation.repositoryUsername || '-'}</dd>
+              <dd>{selectedOrganisation.repositoryReadUsername || '-'}</dd>
             </div>
             <div>
               <dt>Password</dt>
-              <dd>{selectedOrganisation.repositoryPassword || '-'}</dd>
+              <dd>{selectedOrganisation.repositoryReadPassword || '-'}</dd>
             </div>
           </dl>
         </div>
+        {canViewOwnerRepositoryCredentials && (
+          <div className="organisation-repository">
+            <h4>Owner read/write access</h4>
+            <dl>
+              <div>
+                <dt>Username</dt>
+                <dd>{selectedOrganisation.repositoryUsername || '-'}</dd>
+              </div>
+              <div>
+                <dt>Password</dt>
+                <dd>{selectedOrganisation.repositoryPassword || '-'}</dd>
+              </div>
+            </dl>
+          </div>
+        )}
+        {canViewJoinPassword && (
+          <div className="organisation-repository">
+            <h4>Join access</h4>
+            <dl>
+              <div>
+                <dt>Password</dt>
+                <dd>
+                  {selectedOrganisation.joinRequiresPassword
+                    ? selectedOrganisation.joinPassword || 'Private password unavailable'
+                    : 'Open to join'}
+                </dd>
+              </div>
+            </dl>
+          </div>
+        )}
       </section>
     );
   }
@@ -398,16 +502,44 @@ export default function Organisation() {
 
         <div className="organisation-join-list">
           <h3>Join an organisation</h3>
+          <label className="form-group organisation-join-search">
+            Search
+            <input
+              value={joinSearch}
+              onChange={event => setJoinSearch(event.target.value)}
+              placeholder="Search organisations"
+            />
+          </label>
           {availableOrganisations.length === 0 ? (
             <p className="organisation-empty">No other organisations are available to join.</p>
+          ) : matchingAvailableOrganisations.length === 0 ? (
+            <p className="organisation-empty">No organisations match your search.</p>
           ) : (
-            availableOrganisations.map(organisation => (
+            matchingAvailableOrganisations.map(organisation => (
               <div className="organisation-join-row" key={organisation.id}>
                 <div>
                   <strong>{organisation.name}</strong>
                   <p>{organisation.description || 'No description yet.'}</p>
+                  {organisation.joinRequiresPassword && (
+                    <label className="form-group organisation-join-password">
+                      Join password
+                      <input
+                        type="password"
+                        value={joinPasswords[organisation.id] || ''}
+                        onChange={event => setJoinPasswords(current => ({
+                          ...current,
+                          [organisation.id]: event.target.value,
+                        }))}
+                        required
+                      />
+                    </label>
+                  )}
                 </div>
-                <button type="button" disabled={joining} onClick={() => handleJoin(organisation.id)}>
+                <button
+                  type="button"
+                  disabled={joining || (organisation.joinRequiresPassword && !joinPasswords[organisation.id])}
+                  onClick={() => handleJoin(organisation.id)}
+                >
                   Join
                 </button>
               </div>
@@ -428,30 +560,46 @@ export default function Organisation() {
       );
     }
 
-    if (!isOwner) {
-      return (
-        <div className="rdf-empty-field-pane">
-          <h3>Danger</h3>
-          <p>Only organisation owners can delete an organisation.</p>
-        </div>
-      );
-    }
-
     return (
       <section className="organisation-detail-section">
-        <div className="organisation-danger-zone">
-          <h4>Delete organisation</h4>
-          <p>This permanently deletes the organisation and its data.</p>
-          <button
-            type="button"
-            className="organisation-delete-button"
-            disabled={deletingOrganisation || !canDelete}
-            title={!canDelete ? 'Only the sole owner can delete an organisation.' : undefined}
-            onClick={() => handleDeleteOrganisation(selectedOrganisation)}
-          >
-            {deletingOrganisation ? 'Deleting...' : 'Delete organisation'}
-          </button>
-        </div>
+        {selectedOrganisation.currentUserRole && (
+          <div className="organisation-danger-zone">
+            <h4>Leave organisation</h4>
+            <p>You will lose access to this organisation unless you join it again.</p>
+            <button
+              type="button"
+              className="organisation-delete-button"
+              disabled={leavingOrganisation || !canLeave}
+              title={!canLeave ? 'The last owner cannot leave an organisation.' : undefined}
+              onClick={() => handleLeaveOrganisation(selectedOrganisation)}
+            >
+              {leavingOrganisation ? 'Leaving...' : 'Leave organisation'}
+            </button>
+          </div>
+        )}
+
+        {!isOwner && (
+          <div className="rdf-empty-field-pane">
+            <h3>Delete organisation</h3>
+            <p>Only organisation owners can delete an organisation.</p>
+          </div>
+        )}
+
+        {isOwner && (
+          <div className="organisation-danger-zone">
+            <h4>Delete organisation</h4>
+            <p>This permanently deletes the organisation and its data.</p>
+            <button
+              type="button"
+              className="organisation-delete-button"
+              disabled={deletingOrganisation || !canDelete}
+              title={!canDelete ? 'Only the sole owner can delete an organisation.' : undefined}
+              onClick={() => handleDeleteOrganisation(selectedOrganisation)}
+            >
+              {deletingOrganisation ? 'Deleting...' : 'Delete organisation'}
+            </button>
+          </div>
+        )}
       </section>
     );
   }
@@ -505,6 +653,15 @@ export default function Organisation() {
               ))
             )}
           </div>
+
+          <button
+            type="button"
+            className={`organisation-access-button${activePanel === 'access' ? ' active' : ''}`}
+            onClick={() => setActivePanel('access')}
+            aria-pressed={activePanel === 'access'}
+          >
+            Create / join
+          </button>
 
           <div className="organisation-option-list" role="tablist" aria-label="Organisation sections">
             {panelOptions.map(option => (

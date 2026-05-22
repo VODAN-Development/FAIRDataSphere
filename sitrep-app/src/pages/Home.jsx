@@ -45,6 +45,7 @@ export default function Home() {
     activeOrganisationIsUnscoped,
     loading: organisationLoading,
     organisations,
+    selectOrganisation,
   } = useOrganisationContext();
 
   const shouldLoadOverview = !!user && (!!activeOrganisationId || activeOrganisationIsUnscoped);
@@ -92,11 +93,33 @@ export default function Home() {
                 : 'Select or create an organisation to start working.'}
           </p>
         </div>
-        {activeOrganisationCanWrite && (
-          <Link className="home-primary-action" to="/data-input">
-            Create report item
-          </Link>
-        )}
+        <div className="home-dashboard-actions">
+          <label className="home-organisation-selector">
+            Organisation
+            <select
+              value={activeOrganisationId}
+              onChange={event => selectOrganisation(event.target.value)}
+              disabled={organisationLoading || (!organisations.length && user.role !== 'admin')}
+            >
+              {user.role === 'admin' && (
+                <option value="">No organisation</option>
+              )}
+              {!organisations.length && user.role !== 'admin' && (
+                <option value="">No organisations available</option>
+              )}
+              {organisations.map(organisation => (
+                <option key={organisation.id} value={organisation.id}>
+                  {organisation.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {activeOrganisationCanWrite && (
+            <Link className="home-primary-action" to="/data-input">
+              Create report item
+            </Link>
+          )}
+        </div>
       </section>
 
       {(error || organisationLoading) && (
