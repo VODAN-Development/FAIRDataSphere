@@ -1,7 +1,7 @@
 # Dependencies
 node_modules/
-backend-rdf\node_modules\
-sitrep-app\node_modules\
+backend-rdf/node_modules/
+sitrep-app/node_modules/
 
 # Builds and caches
 dist/
@@ -75,7 +75,11 @@ Thumbs.db
 *.sw?
 ~$*
 
+# data files
+data/
+
 # Misc
 files/
 data pipeline.odt
 notes.txt
+sitrep-app/src/content/pendingReleaseNotes.js
