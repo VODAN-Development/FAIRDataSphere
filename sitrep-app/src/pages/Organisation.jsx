@@ -433,6 +433,14 @@ export default function Organisation() {
               <dt>Repository</dt>
               <dd>{selectedOrganisation.repository || 'Not provisioned yet'}</dd>
             </div>
+            <div>
+              <dt>Web view</dt>
+              <dd>
+                <a href="https://agraph.fairdatasphere.com" target="_blank" rel="noreferrer">
+                  agraph.fairdatasphere.com
+                </a>
+              </dd>
+            </div>
           </dl>
         </div>
         <div className="organisation-repository">

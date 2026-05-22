@@ -965,6 +965,10 @@ nav a button {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
+.organisation-repository dd a {
+  color: var(--color-primary);
+}
+
 .organisation-danger-zone {
   display: grid;
   gap: 0.65rem;
