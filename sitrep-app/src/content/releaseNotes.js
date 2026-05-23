@@ -45,13 +45,14 @@ export const RELEASE_NOTES = [
           'Added encryption for repostitory passwords and organisation join passwords.',
           'Added organisation selector on dashboard.',
           'Added different allegrograph users for owners/member with members only having read access.',
+          'Added link to allegrograph webview inside credentials tab.', 
         ],
       },
       {
         title: 'Fixed',
         items: [
           'Organisation role setting inconsistencies. Owners can promote/demote members and guests to owner/member/guest. Members can promote guests to member.',
-          'Class instances not showing in the itemss tab',
+          'Class instances not showing in the items tab',
           'Reports stopped being visible when a report item added to it was deleted.',
           'Fixed various Apollo warnings and soon to be depreciated or required features.',
           'Fixed UI bug on rdf structure page.',

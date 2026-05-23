@@ -611,6 +611,21 @@ function organisationDataPattern(subject, organisationId) {
   return `${subject} sitrep:organisationId ${literal(organisationId)} .`;
 }
 
+async function ensureSubjectOrganisationData(subject, organisationId) {
+  if (!organisationId) return;
+  await runSparqlUpdate(`${PREFIXES}
+    INSERT {
+      ${subject} sitrep:organisationId ${literal(organisationId)} .
+    }
+    WHERE {
+      ${subject} ?p ?o .
+      FILTER NOT EXISTS {
+        ${subject} sitrep:organisationId ?existingOrganisationId .
+      }
+    }
+  `);
+}
+
 function scopedSubjectDelete(subject, organisationId) {
   if (organisationId) {
     return `DELETE WHERE {
@@ -1864,6 +1879,7 @@ const resolvers = {
       if (!RDF.classes?.[entityType]) throw new Error(`Unknown RDF entity type: ${entityType}`);
 
       const subject = subjectFromEntityIdentifier(entityType, id, uri);
+      await ensureSubjectOrganisationData(subject, organisationId);
       await deleteNestedGroupTriplesForSubject(entityType, subject);
       await runSparqlUpdate(`${PREFIXES}
         ${scopedSubjectDelete(subject, organisationId)};
