@@ -8,12 +8,39 @@ const GET_RDF_STRUCTURE = gql`
     rdfStructure(organisationId: $organisationId) {
       json
     }
+    rdfStructurePresets(organisationId: $organisationId) {
+      id
+      name
+      json
+      createdAt
+      updatedAt
+    }
   }
 `;
 
 const UPDATE_RDF_STRUCTURE = gql`
   mutation UpdateRdfStructure($json: String!, $organisationId: ID) {
     updateRdfStructure(json: $json, organisationId: $organisationId) {
+      json
+    }
+  }
+`;
+
+const SAVE_RDF_STRUCTURE_PRESET = gql`
+  mutation SaveRdfStructurePreset($name: String!, $json: String!, $organisationId: ID) {
+    saveRdfStructurePreset(name: $name, json: $json, organisationId: $organisationId) {
+      id
+      name
+      json
+      createdAt
+      updatedAt
+    }
+  }
+`;
+
+const LOAD_RDF_STRUCTURE_PRESET = gql`
+  mutation LoadRdfStructurePreset($id: ID!, $organisationId: ID) {
+    loadRdfStructurePreset(id: $id, organisationId: $organisationId) {
       json
     }
   }
@@ -61,6 +88,27 @@ const classPropertyOptions = [
 
 const groupPropertyNames = new Set(['label', 'predicate', 'inputType', 'required', 'resourceMode', 'className', 'targetEntityType', 'targetClass', 'targetTemplate', 'targetLabelField']);
 const protectedEntityTypes = new Set(['report', 'reportItem']);
+
+function downloadJsonFile(filename, json) {
+  const blob = new Blob([json.endsWith('\n') ? json : `${json}\n`], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function safeFilename(value, fallback) {
+  return String(value || fallback)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    || fallback;
+}
 
 const columnHelp = {
   order: 'Drag this handle to change the order fields appear in forms and item displays.',
@@ -1741,7 +1789,7 @@ function ClassPropertiesPane({ structure, selectedEntityType, entityTypes, onCha
   );
 }
 
-function RdfStructureEditor({ activeOrganisationId, activeOrganisationIsUnscoped }) {
+function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, activeOrganisationIsUnscoped }) {
   const { data, loading, error, refetch } = useQuery(GET_RDF_STRUCTURE, {
     variables: { organisationId: activeOrganisationId },
     skip: !activeOrganisationId && !activeOrganisationIsUnscoped,
@@ -1749,6 +1797,13 @@ function RdfStructureEditor({ activeOrganisationId, activeOrganisationIsUnscoped
   const [updateStructure] = useMutation(UPDATE_RDF_STRUCTURE, {
     refetchQueries: [{ query: GET_RDF_STRUCTURE, variables: { organisationId: activeOrganisationId } }],
   });
+  const [savePreset, { loading: savingPreset }] = useMutation(SAVE_RDF_STRUCTURE_PRESET, {
+    refetchQueries: [{ query: GET_RDF_STRUCTURE, variables: { organisationId: activeOrganisationId } }],
+  });
+  const [loadPreset, { loading: loadingPreset }] = useMutation(LOAD_RDF_STRUCTURE_PRESET, {
+    refetchQueries: [{ query: GET_RDF_STRUCTURE, variables: { organisationId: activeOrganisationId } }],
+  });
+  const fileInputRef = useRef(null);
   const [rawJson, setRawJson] = useState('');
   const [message, setMessage] = useState('');
   const [editableFieldNames, setEditableFieldNames] = useState({});
@@ -1780,8 +1835,11 @@ function RdfStructureEditor({ activeOrganisationId, activeOrganisationIsUnscoped
     ? selectedEntityType
     : entityTypes[0] || '';
   const selectedRows = rowsByEntity[activeEntityType] || [];
+  const presets = data?.rdfStructurePresets || [];
+  const canWriteStructure = !!activeOrganisationCanWrite;
 
   const setEntityRows = (entityType, rows) => {
+    if (!canWriteStructure) return;
     const entity = structure[entityType] || {};
     setEditableFieldNames((current) => ({
       ...current,
@@ -1834,6 +1892,7 @@ function RdfStructureEditor({ activeOrganisationId, activeOrganisationIsUnscoped
   };
 
   const setClasses = ({ classes, uriTemplates, renamedClass, templateChanged }) => {
+    if (!canWriteStructure) return;
     const renamedEntity = renamedClass && structure[renamedClass.from]
       ? {
           [renamedClass.to]: entityWithTemplateId(renamedClass.to, structure[renamedClass.from], uriTemplates[renamedClass.to]),
@@ -1869,6 +1928,7 @@ function RdfStructureEditor({ activeOrganisationId, activeOrganisationIsUnscoped
   };
 
   const addClass = () => {
+    if (!canWriteStructure) return;
     const name = nextClassName(structure);
     const nextStructure = {
       ...structure,
@@ -1894,6 +1954,7 @@ function RdfStructureEditor({ activeOrganisationId, activeOrganisationIsUnscoped
   };
 
   const deleteClass = (entityType) => {
+    if (!canWriteStructure) return;
     if (protectedEntityTypes.has(entityType)) return;
     const nextClasses = omitKeys(structure.classes || {}, [entityType]);
     const nextUriTemplates = omitKeys(structure.uriTemplates || {}, [entityType]);
@@ -1916,6 +1977,7 @@ function RdfStructureEditor({ activeOrganisationId, activeOrganisationIsUnscoped
   };
 
   const setClassProperties = (nextStructure) => {
+    if (!canWriteStructure) return;
     setRawJson(JSON.stringify(nextStructure, null, 2));
   };
 
@@ -1925,6 +1987,7 @@ function RdfStructureEditor({ activeOrganisationId, activeOrganisationIsUnscoped
 
   const handleSave = async () => {
     try {
+      if (!canWriteStructure) return;
       setMessage('');
       const nextStructure = buildStructure();
       await updateStructure({ variables: { json: JSON.stringify(nextStructure, null, 2), organisationId: activeOrganisationId } });
@@ -1938,6 +2001,87 @@ function RdfStructureEditor({ activeOrganisationId, activeOrganisationIsUnscoped
     }
   };
 
+  const handleSavePreset = async () => {
+    if (!canWriteStructure) return;
+    const name = window.prompt('Preset name');
+    if (!name) return;
+    try {
+      setMessage('');
+      const nextStructure = buildStructure();
+      await savePreset({
+        variables: {
+          name,
+          json: JSON.stringify(nextStructure, null, 2),
+          organisationId: activeOrganisationId,
+        },
+      });
+      setMessage('RDF preset saved.');
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    }
+  };
+
+  const handleLoadPreset = async (preset) => {
+    if (!canWriteStructure) return;
+    const confirmed = window.confirm(`Load "${preset.name}"?\n\nThis replaces the current RDF structure.`);
+    if (!confirmed) return;
+    try {
+      setMessage('');
+      await loadPreset({ variables: { id: preset.id, organisationId: activeOrganisationId } });
+      await refetch({ organisationId: activeOrganisationId });
+      setRawJson('');
+      setEditableFieldNames({});
+      setEditableClassNames([]);
+      setMessage('RDF preset loaded.');
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    }
+  };
+
+  const handleDownloadCurrent = () => {
+    if (!sourceJson) return;
+    const formattedJson = JSON.stringify(JSON.parse(sourceJson), null, 2);
+    downloadJsonFile('rdf-structure.json', formattedJson);
+  };
+
+  const handleDownloadPreset = (preset) => {
+    downloadJsonFile(`${safeFilename(preset.name, 'rdf-preset')}.json`, preset.json);
+  };
+
+  const importStructureJson = async (json) => {
+    const formattedJson = JSON.stringify(JSON.parse(json), null, 2);
+    const importMode = window.confirm('Import this file as a preset?\n\nChoose Cancel to replace the current RDF structure instead.')
+      ? 'preset'
+      : 'current';
+    if (importMode === 'preset') {
+      const name = window.prompt('Preset name');
+      if (!name) return;
+      await savePreset({ variables: { name, json: formattedJson, organisationId: activeOrganisationId } });
+      setMessage('RDF preset imported.');
+      return;
+    }
+    const confirmed = window.confirm('Replace the current RDF structure with this file?');
+    if (!confirmed) return;
+    await updateStructure({ variables: { json: formattedJson, organisationId: activeOrganisationId } });
+    await refetch({ organisationId: activeOrganisationId });
+    setRawJson('');
+    setEditableFieldNames({});
+    setEditableClassNames([]);
+    setMessage('RDF structure imported.');
+  };
+
+  const handleImportFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !canWriteStructure) return;
+    try {
+      setMessage('');
+      await importStructureJson(await file.text());
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    }
+  };
+
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -1946,17 +2090,74 @@ function RdfStructureEditor({ activeOrganisationId, activeOrganisationIsUnscoped
   if (error) return <div className="error-message">{error.message}</div>;
 
   return (
-    <OrganisationGate requireWrite>
+    <OrganisationGate>
     <div className="settings-page">
       <div className="rdf-structure-window">
         <div className="rdf-window-header">
           <h2>RDF Structure</h2>
-          <button type="button" onClick={handleSave} className="create-report-button">
-            Save RDF Structure
-          </button>
+          <div className="rdf-window-actions">
+            {canWriteStructure && (
+              <button type="button" onClick={handleSave} className="create-report-button" disabled={!!parseError}>
+                Save RDF Structure
+              </button>
+            )}
+            <button type="button" onClick={handleDownloadCurrent} className="create-report-button" disabled={!sourceJson || !!parseError}>
+              Download Current Structure
+            </button>
+          </div>
           {message && <div className={message.startsWith('Error') ? 'error-message' : 'success-message'}>{message}</div>}
           {parseError && <div className="error-message">JSON error: {parseError}</div>}
+          {!canWriteStructure && (
+            <div className="success-message">Guests can view and download RDF structures and presets.</div>
+          )}
         </div>
+
+        <section className="rdf-preset-panel" aria-label="RDF structure presets">
+          <div className="rdf-preset-heading">
+            <h3>Presets</h3>
+            {canWriteStructure && (
+              <div className="rdf-preset-heading-actions">
+                <button type="button" onClick={handleSavePreset} className="create-report-button" disabled={!!parseError || savingPreset}>
+                  {savingPreset ? 'Saving Preset...' : 'Save as Preset'}
+                </button>
+                <button type="button" onClick={() => fileInputRef.current?.click()} className="create-report-button">
+                  Import File
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="application/json,.json"
+                  className="rdf-hidden-file-input"
+                  onChange={handleImportFile}
+                />
+              </div>
+            )}
+          </div>
+          {presets.length === 0 ? (
+            <p>No presets saved yet.</p>
+          ) : (
+            <div className="rdf-preset-list">
+              {presets.map(preset => (
+                <div className="rdf-preset-row" key={preset.id}>
+                  <div>
+                    <strong>{preset.name}</strong>
+                    <span>Updated {new Date(preset.updatedAt).toLocaleString()}</span>
+                  </div>
+                  <div className="rdf-preset-actions">
+                    <button type="button" onClick={() => handleDownloadPreset(preset)}>
+                      Download
+                    </button>
+                    {canWriteStructure && (
+                      <button type="button" onClick={() => handleLoadPreset(preset)} disabled={loadingPreset}>
+                        Load
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
 
         {structure ? (
           <>
@@ -2043,7 +2244,10 @@ function RdfStructureEditor({ activeOrganisationId, activeOrganisationIsUnscoped
         <h3>Advanced JSON</h3>
         <textarea
           value={sourceJson}
-          onChange={(e) => setRawJson(e.target.value)}
+          onChange={(e) => {
+            if (canWriteStructure) setRawJson(e.target.value);
+          }}
+          readOnly={!canWriteStructure}
           rows={16}
           spellCheck="false"
           className="rdf-json-editor"
@@ -2063,12 +2267,13 @@ function RdfStructureEditor({ activeOrganisationId, activeOrganisationIsUnscoped
 }
 
 export default function RdfStructure() {
-  const { activeOrganisationId, activeOrganisationIsUnscoped } = useOrganisationContext();
+  const { activeOrganisationCanWrite, activeOrganisationId, activeOrganisationIsUnscoped } = useOrganisationContext();
   const editorKey = activeOrganisationIsUnscoped ? 'unscoped' : activeOrganisationId || 'no-organisation';
 
   return (
     <RdfStructureEditor
       key={editorKey}
+      activeOrganisationCanWrite={activeOrganisationCanWrite}
       activeOrganisationId={activeOrganisationId}
       activeOrganisationIsUnscoped={activeOrganisationIsUnscoped}
     />

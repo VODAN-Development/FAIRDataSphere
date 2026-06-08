@@ -1,5 +1,8 @@
 import { runSparqlQuery, runSparqlUpdate, withRepository } from "../services/allegroClient.js";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { decryptFieldValueSafe, encryptFieldValue } from "../services/fieldEncryption.js";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { authenticateUser, createUser, updateUserPassword, updateUserProfile } from "../auth/authStore.js";
 import {
   canViewOrganisation,
@@ -11,8 +14,11 @@ import {
   leaveOrganisation,
   listMyOrganisations,
   listOrganisations,
+  listOrganisationRdfStructurePresets,
   organisationRdfStructureJson,
   organisationRepositoryConfig,
+  rdfStructurePresetJson,
+  saveOrganisationRdfStructurePreset,
   updateOrganisationRdfStructureJson,
   updateOrganisation,
   updateOrganisationMemberRole,
@@ -58,12 +64,73 @@ import {
   applyTemplate,
 } from "../rdf/reportRdfConfig.js";
 
+const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "data");
+const COMPILED_REPORTS_DIR = join(DATA_DIR, "compiled-reports");
+
 function maxNumericBinding(result, variableName) {
   const values = result.results.bindings
     .map(binding => parseInt(binding[variableName]?.value, 10))
     .filter(Number.isFinite);
 
   return values.length > 0 ? Math.max(...values) : 0;
+}
+
+function compiledReportStoreKey(organisationId) {
+  return String(organisationId || "no-organisation").replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+function defaultCompiledReportConfig() {
+  return {
+    organisationName: "EEPA",
+    reportSeriesTitle: "Situation Report EEPA Horn",
+    headerNote: "Situation report",
+    footerText: "Compiled from SITREP report items.",
+    accentColor: "#1f4e79",
+    includeFieldLabels: true,
+    itemFieldNames: [],
+  };
+}
+
+function compiledReportFilePath(organisationId) {
+  return join(COMPILED_REPORTS_DIR, `${compiledReportStoreKey(organisationId)}.json`);
+}
+
+async function readCompiledReportStore(organisationId) {
+  try {
+    const json = await readFile(compiledReportFilePath(organisationId), "utf8");
+    const store = JSON.parse(json);
+    return {
+      config: { ...defaultCompiledReportConfig(), ...(store.config || {}) },
+      reports: Array.isArray(store.reports) ? store.reports : [],
+    };
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    return { config: defaultCompiledReportConfig(), reports: [] };
+  }
+}
+
+async function writeCompiledReportStore(organisationId, store) {
+  await mkdir(COMPILED_REPORTS_DIR, { recursive: true });
+  await writeFile(compiledReportFilePath(organisationId), `${JSON.stringify(store, null, 2)}\n`, "utf8");
+}
+
+function normalizeCompiledReportConfig(config = {}) {
+  const defaults = defaultCompiledReportConfig();
+  return {
+    ...defaults,
+    ...config,
+    accentColor: config.accentColor || defaults.accentColor,
+    includeFieldLabels: config.includeFieldLabels ?? defaults.includeFieldLabels,
+    itemFieldNames: Array.isArray(config.itemFieldNames) ? config.itemFieldNames.filter(Boolean) : defaults.itemFieldNames,
+  };
+}
+
+function compiledReportPayload(report) {
+  return {
+    ...report,
+    selectedItemIds: (report.selectedItemIds || []).map(id => parseInt(id, 10)).filter(Number.isFinite),
+    itemFieldNames: Array.isArray(report.itemFieldNames) ? report.itemFieldNames : [],
+  };
 }
 
 function sparqlVariableName(fieldName, field = {}) {
@@ -698,6 +765,16 @@ function rdfStructurePayload() {
     reportItemFields: editableFieldEntries("reportItem"),
     reportFields: editableFieldEntries("report"),
   };
+}
+
+async function updateActiveRdfStructure(organisationId, json) {
+  const oldStructure = JSON.parse(rdfStructureJson());
+  const nextStructure = encryptSourceFieldsInStructure(parseRdfStructureJson(json));
+  await migrateStoredRdf(oldStructure, nextStructure);
+  applyRdfStructureFromJson(JSON.stringify(nextStructure));
+  await updateOrganisationRdfStructureJson(organisationId, JSON.stringify(nextStructure));
+  await syncEquivalentClassTriples(nextStructure);
+  return rdfStructurePayload();
 }
 
 function parseFieldValue(field, value) {
@@ -1424,6 +1501,11 @@ const resolvers = {
       return rdfStructurePayload();
     },
 
+    rdfStructurePresets: async (_, { organisationId }, context) => {
+      await requireOrganisationView(context, organisationId);
+      return listOrganisationRdfStructurePresets(organisationId);
+    },
+
     rdfEntities: async (_, { entityType, organisationId }, context) => rdfEntitiesForType(entityType, organisationId, context),
 
     reportItems: async (_, { organisationId }, context) => {
@@ -1535,6 +1617,27 @@ const resolvers = {
       return loadReportSelectedItemIds(report, subject);
       });
     },
+
+    compiledReportConfig: async (_, { organisationId }, context) => {
+      await requireOrganisationView(context, organisationId);
+      const store = await readCompiledReportStore(organisationId);
+      return normalizeCompiledReportConfig(store.config);
+    },
+
+    compiledReports: async (_, { organisationId }, context) => {
+      await requireOrganisationView(context, organisationId);
+      const store = await readCompiledReportStore(organisationId);
+      return store.reports
+        .map(compiledReportPayload)
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    },
+
+    compiledReport: async (_, { id, organisationId }, context) => {
+      await requireOrganisationView(context, organisationId);
+      const store = await readCompiledReportStore(organisationId);
+      const report = store.reports.find(candidate => String(candidate.id) === String(id));
+      return report ? compiledReportPayload(report) : null;
+    },
   },
 
   Mutation: {
@@ -1606,14 +1709,26 @@ const resolvers = {
         await requireOrganisationWrite(context, organisationId);
       }
       return withOrganisationRepository(organisationId, async () => {
-      const oldStructure = JSON.parse(rdfStructureJson());
-      const nextStructure = encryptSourceFieldsInStructure(parseRdfStructureJson(json));
-      await migrateStoredRdf(oldStructure, nextStructure);
-      applyRdfStructureFromJson(JSON.stringify(nextStructure));
-      await updateOrganisationRdfStructureJson(organisationId, JSON.stringify(nextStructure));
-      await syncEquivalentClassTriples(nextStructure);
-      return rdfStructurePayload();
+      return updateActiveRdfStructure(organisationId, json);
       });
+    },
+
+    saveRdfStructurePreset: async (_, { name, json, organisationId }, context) => {
+      const user = requireAuth(context);
+      if (!(user.role === "admin" && !organisationId)) {
+        await requireOrganisationWrite(context, organisationId);
+      }
+      parseRdfStructureJson(json);
+      return saveOrganisationRdfStructurePreset(organisationId, { name, json, createdBy: user.id });
+    },
+
+    loadRdfStructurePreset: async (_, { id, organisationId }, context) => {
+      const user = requireAuth(context);
+      if (!(user.role === "admin" && !organisationId)) {
+        await requireOrganisationWrite(context, organisationId);
+      }
+      const json = await rdfStructurePresetJson(organisationId, id);
+      return withOrganisationRepository(organisationId, async () => updateActiveRdfStructure(organisationId, json));
     },
 
     createReportItemFromFields: async (_, { fieldValues, organisationId }, context) => {
@@ -1833,6 +1948,54 @@ const resolvers = {
       await refreshItemReportMetadata(itemId, organisationId, context);
       return true;
       });
+    },
+
+    updateCompiledReportConfig: async (_, { config, organisationId }, context) => {
+      await requireOrganisationWrite(context, organisationId);
+      const store = await readCompiledReportStore(organisationId);
+      const nextConfig = normalizeCompiledReportConfig({ ...store.config, ...config });
+      await writeCompiledReportStore(organisationId, { ...store, config: nextConfig });
+      return nextConfig;
+    },
+
+    createCompiledReport: async (_, { input, organisationId }, context) => {
+      await requireOrganisationWrite(context, organisationId);
+      const store = await readCompiledReportStore(organisationId);
+      const now = new Date().toISOString();
+      const report = compiledReportPayload({
+        id: `${Date.now()}`,
+        sourceReportId: input.sourceReportId,
+        title: input.title,
+        subtitle: input.subtitle || "",
+        executiveSummary: input.executiveSummary || "",
+        bodyHtml: input.bodyHtml,
+        selectedItemIds: input.selectedItemIds || [],
+        itemFieldNames: input.itemFieldNames || [],
+        configSnapshot: input.configSnapshot || JSON.stringify(store.config || defaultCompiledReportConfig()),
+        createdAt: now,
+        updatedAt: now,
+      });
+      await writeCompiledReportStore(organisationId, {
+        ...store,
+        reports: [report, ...store.reports],
+      });
+      return report;
+    },
+
+    updateCompiledReport: async (_, { id, input, organisationId }, context) => {
+      await requireOrganisationWrite(context, organisationId);
+      const store = await readCompiledReportStore(organisationId);
+      const reportIndex = store.reports.findIndex(candidate => String(candidate.id) === String(id));
+      if (reportIndex === -1) throw new Error("Compiled report not found in this organisation.");
+      const nextReport = compiledReportPayload({
+        ...store.reports[reportIndex],
+        ...Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)),
+        updatedAt: new Date().toISOString(),
+      });
+      const nextReports = [...store.reports];
+      nextReports[reportIndex] = nextReport;
+      await writeCompiledReportStore(organisationId, { ...store, reports: nextReports });
+      return nextReport;
     },
 
     createRdfEntityFromFields: async (_, { entityType, fieldValues, organisationId }, context) => {

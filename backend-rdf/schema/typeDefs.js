@@ -62,6 +62,15 @@ export default `#graphql
     reportFields: [RdfStructureField!]!
   }
 
+  type RdfStructurePreset {
+    id: ID!
+    name: String!
+    json: String!
+    createdBy: ID
+    createdAt: String!
+    updatedAt: String!
+  }
+
   input RdfFieldValueInput {
     name: String!
     value: String
@@ -100,6 +109,61 @@ export default `#graphql
     fieldValues: [RdfFieldValue!]!
   }
 
+  type CompiledReportConfig {
+    organisationName: String
+    reportSeriesTitle: String
+    headerNote: String
+    footerText: String
+    accentColor: String
+    includeFieldLabels: Boolean!
+    itemFieldNames: [String!]!
+  }
+
+  type CompiledReport {
+    id: ID!
+    sourceReportId: ID!
+    title: String!
+    subtitle: String
+    executiveSummary: String
+    bodyHtml: String!
+    selectedItemIds: [Int!]!
+    itemFieldNames: [String!]!
+    configSnapshot: String
+    createdAt: String!
+    updatedAt: String!
+  }
+
+  input CompiledReportConfigInput {
+    organisationName: String
+    reportSeriesTitle: String
+    headerNote: String
+    footerText: String
+    accentColor: String
+    includeFieldLabels: Boolean
+    itemFieldNames: [String!]
+  }
+
+  input CompiledReportInput {
+    sourceReportId: ID!
+    title: String!
+    subtitle: String
+    executiveSummary: String
+    bodyHtml: String!
+    selectedItemIds: [Int!]!
+    itemFieldNames: [String!]
+    configSnapshot: String
+  }
+
+  input CompiledReportUpdateInput {
+    title: String
+    subtitle: String
+    executiveSummary: String
+    bodyHtml: String
+    selectedItemIds: [Int!]
+    itemFieldNames: [String!]
+    configSnapshot: String
+  }
+
   type RdfEntity {
     entityType: String!
     id: ID!
@@ -113,11 +177,15 @@ export default `#graphql
     organisations: [Organisation!]!
     myOrganisations: [Organisation!]!
     rdfStructure(organisationId: ID): RdfStructure!
+    rdfStructurePresets(organisationId: ID): [RdfStructurePreset!]!
     rdfEntities(entityType: String!, organisationId: ID): [RdfEntity!]!
     reportItems(organisationId: ID): [ReportItem!]!
     reportItem(id: ID!, organisationId: ID): ReportItem
     reports(organisationId: ID): [Report!]!
     report(id: ID!, organisationId: ID): Report
+    compiledReportConfig(organisationId: ID): CompiledReportConfig!
+    compiledReports(organisationId: ID): [CompiledReport!]!
+    compiledReport(id: ID!, organisationId: ID): CompiledReport
   }
 
   type Mutation {
@@ -134,6 +202,8 @@ export default `#graphql
     deleteOrganisation(id: ID!): Boolean!
 
     updateRdfStructure(json: String!, organisationId: ID): RdfStructure!
+    saveRdfStructurePreset(name: String!, json: String!, organisationId: ID): RdfStructurePreset!
+    loadRdfStructurePreset(id: ID!, organisationId: ID): RdfStructure!
 
     createReportItemFromFields(fieldValues: [RdfFieldValueInput!]!, organisationId: ID): ReportItem!
     updateReportItemFromFields(id: ID!, fieldValues: [RdfFieldValueInput!]!, organisationId: ID): ReportItem
@@ -145,6 +215,9 @@ export default `#graphql
 
     addItemToReport(reportId: ID!, itemId: ID!, organisationId: ID): Boolean!
     removeItemFromReport(reportId: ID!, itemId: ID!, organisationId: ID): Boolean!
+    updateCompiledReportConfig(config: CompiledReportConfigInput!, organisationId: ID): CompiledReportConfig!
+    createCompiledReport(input: CompiledReportInput!, organisationId: ID): CompiledReport!
+    updateCompiledReport(id: ID!, input: CompiledReportUpdateInput!, organisationId: ID): CompiledReport!
     createRdfEntityFromFields(entityType: String!, fieldValues: [RdfFieldValueInput!]!, organisationId: ID): RdfEntity!
     updateRdfEntity(entityType: String!, id: ID!, uri: String, fieldValues: [RdfFieldValueInput!]!, organisationId: ID): RdfEntity!
     deleteRdfEntity(entityType: String!, id: ID!, uri: String, organisationId: ID): Boolean!
