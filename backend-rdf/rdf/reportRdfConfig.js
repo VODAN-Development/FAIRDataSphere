@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_RDF } from "./defaultRdfStructure.js";
 
 const structurePath = join(dirname(fileURLToPath(import.meta.url)), "reportRdfStructure.json");
 const GROUP_PROPERTY_NAMES = new Set([
@@ -16,304 +17,8 @@ const GROUP_PROPERTY_NAMES = new Set([
   "targetClass",
   "targetTemplate",
   "targetLabelField",
+  "importedFields",
 ]);
-
-const DEFAULT_RDF = {
-  prefixes: {
-    sitrep: "http://sitrep.example.org/ontology#",
-    resource: "http://sitrep.example.org/resource/",
-    xsd: "http://www.w3.org/2001/XMLSchema#",
-    rdf: "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-    rdfs: "http://www.w3.org/2000/01/rdf-schema#",
-    owl: "http://www.w3.org/2002/07/owl#",
-    geo: "http://www.w3.org/2003/01/geo/wgs84_pos#",
-    gn: "http://www.geonames.org/ontology#",
-    hds: "http://example.org/hds#",
-    schema: "http://schema.org/",
-    foaf: "http://xmlns.com/foaf/0.1/",
-  },
-  classes: {
-    report: "hds:SituationReport",
-    reportItem: "hds:Situation",
-    location: "hds:Location",
-    organisation: "hds:Organisation",
-    perpetrator: "hds:Perpetrator",
-    person: "schema:Person",
-    place: "schema:Place",
-    victim: "hds:Victim",
-  },
-  equivalentClasses: {
-    location: "schema:Place",
-    perpetrator: "schema:Person",
-    victim: "schema:Person",
-  },
-  classProperties: [],
-  uriTemplates: {
-    report: "resource:Report_{reportNumber}",
-    reportItem: "resource:ReportItem_{entryNumber}",
-    location: "resource:Location_{id}",
-    organisation: "resource:Organisation_{id}",
-    perpetrator: "resource:Perpetrator_{id}",
-    person: "resource:Person_{id}",
-    place: "resource:Place_{id}",
-    victim: "resource:Victim_{id}",
-  },
-  reportItem: {
-    idField: "entryNumber",
-    fields: {
-      entryNumber: { predicate: "sitrep:entryNumber", datatype: "xsd:integer", required: true, parse: "int", generated: true, label: "Entry Number", inputType: "number" },
-      title: { predicate: "sitrep:title", label: "Title", inputType: "text" },
-      paragraph: { predicate: "sitrep:paragraph", label: "Paragraph", inputType: "textarea" },
-      dateOfEvent: { predicate: "hds:date", datatype: "xsd:date", label: "Date of Event", inputType: "date" },
-      countries: { predicate: "sitrep:country", variable: "country", objectType: "uri", vocabulary: "geonames", targetEntityType: "location", targetClass: "hds:Location", targetTemplate: "resource:Location_{id}", targetLabelField: "country", createEntityFromInput: true, label: "Countries", inputType: "uri-list" },
-      regions: { predicate: "sitrep:region", variable: "region", objectType: "uri", vocabulary: "geonames", targetEntityType: "location", targetClass: "hds:Location", targetTemplate: "resource:Location_{id}", targetLabelField: "region", createEntityFromInput: true, label: "Regions", inputType: "uri-list" },
-      settlements: { predicate: "sitrep:settlement", variable: "settlement", objectType: "uri", vocabulary: "geonames", targetEntityType: "location", targetClass: "hds:Location", targetTemplate: "resource:Location_{id}", targetLabelField: "settlement", createEntityFromInput: true, label: "Settlements", inputType: "uri-list" },
-      exactLocation: {
-        label: "Exact location",
-        predicate: "sitrep:coordinates",
-        inputType: "location",
-        className: "hds:Location",
-        targetEntityType: "location",
-        targetClass: "hds:Location",
-        targetTemplate: "resource:Location_{id}",
-        targetLabelField: "coordinates",
-        lat: { predicate: "geo:lat", variable: "lat", datatype: "xsd:decimal", label: "Latitude" },
-        lon: { predicate: "geo:long", variable: "lon", datatype: "xsd:decimal", label: "Longitude" },
-      },
-      eventType: { predicate: "sitrep:eventType", label: "Event Type", inputType: "select",
-        options: {
-          militaryConflict: {
-            label: "Military conflict",
-            inputType: "text",
-            attakingForces: { predicate: "sitrep:attackingForces", variable: "attfor", label: "Attacking forces" },
-            defendingForces: { predicate: "sitrep:defendingForces", variable: "deffor", label: "Defending forces" },
-            weaponsUsed: { predicate: "sitrep:weaponsUsed", variable: "weapons", label: "Weapons used" },
-            mcDeaths: { predicate: "sitrep:deaths", variable: "mcdeaths", datatype: "xsd:integer", label: "Deaths", inputType: "number" },
-            mcInjuries: { predicate: "sitrep:injuries", variable: "mcinjuries", datatype: "xsd:integer", label: "Injuries", inputType: "number"},
-            mcDescription: { predicate: "hds:description", variable: "mcdescription", label: "Description", inputType: "textarea" },
-          },
-          humanRightsAbuses: {
-            label: "Human rights abuses",
-            inputType: "text",
-            abusesReported: { predicate: "sitrep:abusesReported", variable: "abuses", label: "Human rights abuses reported", inputType: "textarea" },
-            hrDeaths: { predicate: "sitrep:deaths", variable: "hrdeaths", datatype: "xsd:integer", label: "Deaths", inputType: "number" },
-            hrInjuries: { predicate: "sitrep:injuries", variable: "hrinjuries", datatype: "xsd:integer", label: "Injuries", inputType: "number" },
-            hrallegedPerpetrators: {
-              predicate: "hds:isPerpetratorOf",
-              objectType: "uri",
-              targetEntityType: "perpetrator",
-              targetClass: "hds:Perpetrator",
-              targetTemplate: "resource:Perpetrator_{id}",
-              targetLabelField: "name",
-              createEntityFromInput: true,
-              allowMultiple: true,
-              variable: "hrperps",
-              label: "Alleged perpetrators",
-              inputType: "uri-list",
-            },
-            hrvictimIdentity: {
-              predicate: "hds:isVictimOf",
-              objectType: "uri",
-              targetEntityType: "victim",
-              targetClass: "hds:Victim",
-              targetTemplate: "resource:Victim_{id}",
-              targetLabelField: "name",
-              createEntityFromInput: true,
-              allowMultiple: true,
-              variable: "hrVictims",
-              label: "Victim identity",
-              inputType: "uri-list",
-            },
-            hrnumberOfVictims: { predicate: "sitrep:numberOfVictims", variable: "hrNumvictims", datatype: "xsd:integer", label: "Number of victims", inputType: "number" },
-            hrDescription: { predicate: "hds:description", variable: "hrdescription", label: "Description", inputType: "textarea" },
-          },
-          humanitarionAndHealthCrisis: {
-            label: "Humanitarian and health crisis",
-            inputType: "text",
-            crisisType: { predicate: "sitrep:crisisType", variable: "crisistype", label: "Type of crisis", inputType: "text" },
-            intermediateNeeds: { predicate: "hds:needs", variable: "needs", label: "Intermediate needs", inputType: "textarea" },
-            affectedIndividuals: {
-              predicate: "hds:affected",
-              objectType: "uri",
-              targetEntityType: "victim",
-              targetClass: "hds:Victim",
-              targetTemplate: "resource:Victim_{id}",
-              targetLabelField: "name",
-              createEntityFromInput: true,
-              allowMultiple: true,
-              variable: "affectedIndividuals",
-              label: "Affected individuals",
-              inputType: "uri-list",
-            },
-            identity: { predicate: "sitrep:identity", variable: "identity", label: "Identity of affected individuals", inputType: "text" },
-            hcDeaths: { predicate: "sitrep:deaths", variable: "hcdeaths", datatype: "xsd:integer", label: "Deaths", inputType: "number" },
-            hcInjuries: { predicate: "sitrep:injuries", variable: "hcinjuries", datatype: "xsd:integer", label: "Injuries", inputType: "number" },
-            hcInvolvedParties: { predicate: "hds:involved", variable: "hcInvolvedParties", label: "Involved parties", inputType: "text-list" },
-            hcDescription: { predicate: "hds:description", variable: "hcdescription", label: "Description", inputType: "textarea" },
-          },
-          politicalDevelopment: {
-            label: "Political development",
-            inputType: "text",
-            politicalType: { predicate: "sitrep:politicalType", variable: "politicalType", label: "Type of political event", inputType: "text" },
-            pdInvolvedParties: { predicate: "hds:involved", variable: "pdInvolvedParties", label: "Involved parties", inputType: "text-list" },
-            outcome: { predicate: "sitrep:outcome", variable: "outcome", label: "Outcome", inputType: "textarea" },
-            pdDescription: { predicate: "hds:description", variable: "pdDescription", label: "Description", inputType: "textarea" },
-          },
-          economicIssue: {
-            label: "Economic issue",
-            inputType: "text",
-            economicType: { predicate: "sitrep:economicType", variable: "economicType", label: "Type of economic event", inputType: "text" },
-            economicAffectedPopulation: { predicate: "hds:affected", variable: "economicAffectedPopulation", label: "Affected population", inputType: "textarea" },
-            governmentAction: { predicate: "sitrep:governmentAction", variable: "governmentAction", label: "Government action taken", inputType: "text-list" },
-            economicDescription: { predicate: "hds:description", variable: "economicDescription", label: "Description", inputType: "textarea" },
-          },
-          socialDevelopment: {
-            label: "Social development",
-            inputType: "text",
-            socialType: { predicate: "sitrep:socialType", variable: "socialType", label: "Type of social event", inputType: "text" },
-            sdInvolvedPartiess: { predicate: "hds:involved", variable: "sdInvolvedParties", label: "Involved parties", inputType: "text-list" },
-            socialDescription: { predicate: "hds:description", variable: "socialDescription", label: "Description", inputType: "textarea" },
-          },
-          environmentIssue: {
-            label: "Environment issue",
-            inputType: "text",
-            environmentType: { predicate: "sitrep:environmentType", variable: "environmentType", label: "Type of environmental event", inputType: "text" },
-            environmentaffectedPopulation: { predicate: "hds:affected", variable: "environmentAffectedPopulation", label: "Affected population", inputType: "textarea" },
-            environmentDescription: { predicate: "hds:description", variable: "environmentDescription", label: "Description", inputType: "textarea" },
-          },
-          internationalResponse: {
-            label: "International response or event",
-            inputType: "text",
-            responseType: { predicate: "sitrep:responseType", variable: "responseType", label: "Type of event", inputType: "text" },
-            involvedGovernments: { predicate: "hds:involved", variable: "involvedGovernments", label: "Involved governments", inputType: "text-list" },
-            involvedOrganisations: {
-              predicate: "hds:involved",
-              objectType: "uri",
-              targetEntityType: "organisation",
-              targetClass: "hds:Organisation",
-              targetTemplate: "resource:Organisation_{id}",
-              targetLabelField: "name",
-              createEntityFromInput: true,
-              allowMultiple: true,
-              variable: "involvedOrganizations",
-              label: "Involved international organizations",
-              inputType: "uri-list",
-            },
-            irInvolvedParties: { predicate: "hds:involved", variable: "irInvolvedParties", label: "Other involved parties", inputType: "text-list" },
-            responseDescription: { predicate: "hds:description", variable: "responseDescription", label: "Description", inputType: "textarea" },
-          },
-          humanTrafficking: {
-            label: "Human trafficking/smuggling/deportation",
-            inputType: "text",
-            traffickingType: { predicate: "sitrep:traffickingType", variable: "traffickingType", label: "Type of trafficking event", inputType: "text" },
-            abusesMentioned: { predicate: "sitrep:abusesMentioned", variable: "abusesMentioned", label: "Human rights abuses mentioned", inputType: "textarea" },
-            htvictimIdentity: {
-              predicate: "hds:isVictimOf",
-              objectType: "uri",
-              targetEntityType: "victim",
-              targetClass: "hds:Victim",
-              targetTemplate: "resource:Victim_{id}",
-              targetLabelField: "name",
-              createEntityFromInput: true,
-              allowMultiple: true,
-              variable: "traffickingVictimIdentity",
-              label: "Identity of victims",
-              inputType: "uri-list",
-            },
-            htnumberOfVictims: { predicate: "sitrep:numberOfVictims", variable: "traffickingNumVictims", datatype: "xsd:integer", label: "Number of victims", inputType: "number" },
-            traffickingDescription: { predicate: "hds:description", variable: "traffickingDescription", label: "Description", inputType: "textarea" },
-          },
-          mediaTargeting: {
-            label: "Targeting of media/propaganda",
-            targetingType: { predicate: "sitrep:targetingType", variable: "targetingType", label: "Type of targeting event", inputType: "text" },
-            tmallegedPerpetrators: {
-              predicate: "hds:isPerpetratorOf",
-              objectType: "uri",
-              targetEntityType: "perpetrator",
-              targetClass: "hds:Perpetrator",
-              targetTemplate: "resource:Perpetrator_{id}",
-              targetLabelField: "name",
-              createEntityFromInput: true,
-              allowMultiple: true,
-              variable: "tmperps",
-              label: "Alleged perpetrators",
-              inputType: "uri-list",
-            },
-            targetedMedia: { predicate: "sitrep:targetedMedia", variable: "targetedMedia", label: "Targeted media", inputType: "text-list" },
-            mediaTargetingDescription: { predicate: "hds:description", variable: "mediaTargetingDescription", label: "Description", inputType: "textarea" },
-          },
-        }
-      },
-      source: { predicate: "hds:source", label: "Source", inputType: "text", "encrypted": true },
-      createdAt: { predicate: "sitrep:createdAt", datatype: "xsd:dateTime", required: true, generated: true, label: "Created At", inputType: "datetime" },
-      updatedAt: { predicate: "hds:updatedAt", datatype: "xsd:dateTime", required: true, generated: true, label: "Updated At", inputType: "datetime" },
-    },
-  },
-  report: {
-    idField: "reportNumber",
-    fields: {
-      title: { predicate: "sitrep:title", required: true, label: "Report Title", inputType: "text" },
-      reportNumber: { predicate: "hds:number", datatype: "xsd:integer", required: true, parse: "int", generated: true, label: "Report Number", inputType: "number" },
-      reportDate: { predicate: "hds:date", datatype: "xsd:date", required: true, label: "Report Date", inputType: "date" },
-      createdAt: { predicate: "sitrep:createdAt", datatype: "xsd:dateTime", required: true, generated: true, label: "Created At", inputType: "datetime" },
-      updatedAt: { predicate: "hds:updatedAt", datatype: "xsd:dateTime", required: true, generated: true, label: "Updated At", inputType: "datetime" },
-      selectedItems: { predicate: "sitrep:hasReportItem", objectType: "uri", targetTemplate: "resource:ReportItem_{entryNumber}", allowMultiple: true, inputType: "uri-list", label: "Selected Items", metadataOnly: true },
-    },
-  },
-  location: {
-    idField: "id",
-    fields: {
-      id: { predicate: "sitrep:locationId", datatype: "xsd:integer", required: true, parse: "int", generated: true, label: "ID", inputType: "number" },
-      name: { predicate: "hds:name", required: true, datatype: "xsd:string", label: "Name", inputType: "text" },
-      country: { predicate: "sitrep:country", objectType: "uri", vocabulary: "geonames", label: "Country", inputType: "uri-list" },
-      region: { predicate: "sitrep:region", objectType: "uri", vocabulary: "geonames", label: "Region", inputType: "uri-list" },
-      settlement: { predicate: "sitrep:settlement", objectType: "uri", vocabulary: "geonames", label: "Settlement", inputType: "uri-list" },
-      coordinates: {
-        label: "Coordinates",
-        predicate: "sitrep:coordinates",
-        inputType: "location",
-        lat: { predicate: "geo:lat", variable: "lat", datatype: "xsd:decimal", label: "Latitude" },
-        lon: { predicate: "geo:long", variable: "lon", datatype: "xsd:decimal", label: "Longitude" },
-      },
-    },
-  },
-  organisation: {
-    idField: "id",
-    fields: {
-      id: { predicate: "sitrep:organisationId", datatype: "xsd:integer", required: true, parse: "int", generated: true, label: "ID", inputType: "number" },
-      name: { predicate: "hds:name", required: true, datatype: "xsd:string", label: "Name", inputType: "text" },
-    },
-  },
-  perpetrator: {
-    idField: "id",
-    fields: {
-      id: { predicate: "sitrep:perpetratorId", datatype: "xsd:integer", required: true, parse: "int", generated: true, label: "ID", inputType: "number" },
-      name: { predicate: "hds:name", required: true, datatype: "xsd:string", label: "Name", inputType: "text" },
-    },
-  },
-  person: {
-    idField: "id",
-    fields: {
-      id: { predicate: "sitrep:personId", datatype: "xsd:integer", required: true, parse: "int", generated: true, label: "ID", inputType: "number" },
-      name: { predicate: "hds:name", required: true, datatype: "xsd:string", label: "Name", inputType: "text" },
-    },
-  },
-  place: {
-    idField: "id",
-    fields: {
-      id: { predicate: "sitrep:placeId", datatype: "xsd:integer", required: true, parse: "int", generated: true, label: "ID", inputType: "number" },
-      name: { predicate: "hds:name", required: true, datatype: "xsd:string", label: "Name", inputType: "text" },
-    },
-  },
-  victim: {
-    idField: "id",
-    fields: {
-      id: { predicate: "sitrep:victimId", datatype: "xsd:integer", required: true, parse: "int", generated: true, label: "ID", inputType: "number" },
-      name: { predicate: "hds:name", required: true, datatype: "xsd:string", label: "Name", inputType: "text" },
-    },
-  }
-};
-
 const LEGACY_EVENT_TYPE_OPTION_NAMES = new Set(Object.keys(DEFAULT_RDF.reportItem.fields.eventType.options || {}));
 
 function prefixesFromStructure(structure) {
@@ -329,8 +34,19 @@ function deepClone(value) {
 }
 
 export function groupSubfieldEntries(group = {}) {
-  return Object.entries(group || {})
+  const entries = Object.entries(group || {})
     .filter(([key, field]) => !GROUP_PROPERTY_NAMES.has(key) && field && typeof field === "object" && field.predicate);
+  if (!Array.isArray(group.importedFields)) return entries;
+
+  const order = new Map(
+    group.importedFields
+      .map(key => String(key).split(".").pop())
+      .map((key, index) => [key, index])
+  );
+  return entries.sort(([leftName], [rightName]) => (
+    (order.get(leftName) ?? Number.MAX_SAFE_INTEGER)
+    - (order.get(rightName) ?? Number.MAX_SAFE_INTEGER)
+  ));
 }
 
 export function isGroupField(field = {}) {
@@ -576,10 +292,11 @@ function normalizeCreateEntityTemplatesForFields(structure, fields) {
       field.targetClass = field.targetClass || structure.classes?.[field.targetEntityType];
       field.targetTemplate = field.targetTemplate || structure.uriTemplates?.[field.targetEntityType];
       const targetFields = structure[field.targetEntityType]?.fields || {};
-      if (!field.targetLabelField || !targetFields[field.targetLabelField]) {
+      const isNestedGroup = isGroupField(field);
+      if (!isNestedGroup && (!field.targetLabelField || !targetFields[field.targetLabelField])) {
         field.targetLabelField = labelFieldForEntityInStructure(structure, field.targetEntityType);
       }
-      if (!isGroupField(field) && field.targetLabelField && field.createEntityFromInput === undefined) {
+      if (!isNestedGroup && field.targetLabelField && field.createEntityFromInput === undefined) {
         field.createEntityFromInput = true;
       }
     }
@@ -705,23 +422,32 @@ export function editableFieldEntries(entityType) {
     : isArrayField(field)
       ? "array"
       : "scalar";
+  const editableSubfield = (name, field) => ({
+    ...field,
+    name,
+    kind: fieldKind(field),
+    subfields: isGroupField(field)
+      ? groupSubfieldEntries(field).map(([subfieldName, subfield]) => editableSubfield(subfieldName, subfield))
+      : undefined,
+  });
   const scalarFields = Object.entries(entity.fields || {})
     .filter(([, field]) => !field.generated && !field.metadataOnly)
     .map(([name, field]) => ({
+      ...field,
       name,
       kind: fieldKind(field),
-      ...field,
       options: field.options
         ? Object.entries(field.options).map(([optionName, option]) => ({
+            ...option,
             name: optionName,
             label: option.label || optionName,
             value: option.value || classValueForOption(optionName),
             subfields: Object.entries(option.fields || {})
-              .map(([subfieldName, subfield]) => ({ name: subfieldName, kind: fieldKind(subfield), ...subfield })),
+              .map(([subfieldName, subfield]) => editableSubfield(subfieldName, subfield)),
           }))
         : undefined,
       subfields: isGroupField(field)
-        ? groupSubfieldEntries(field).map(([subfieldName, subfield]) => ({ name: subfieldName, kind: fieldKind(subfield), ...subfield }))
+        ? groupSubfieldEntries(field).map(([subfieldName, subfield]) => editableSubfield(subfieldName, subfield))
         : undefined,
     }));
 
@@ -745,7 +471,22 @@ export function nestedGroupUri(parentSubject, groupName) {
 }
 
 export function nestedGroupSubject(parentSubject, groupName, group, groupData = {}) {
+  if (group?.targetEntityType && groupData?.id) {
+    const template = group.targetTemplate || RDF.uriTemplates?.[group.targetEntityType];
+    if (template) {
+      return applyTemplate(template, entityTemplateValues(group.targetEntityType, groupData.id));
+    }
+  }
   return nestedGroupUri(parentSubject, groupName);
+}
+
+function groupInputObject(group, value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return { ...value };
+  const labelFieldName = group.targetLabelField
+    || groupSubfieldEntries(group).find(([fieldName]) => fieldName === "name")?.[0]
+    || groupSubfieldEntries(group)[0]?.[0]
+    || "name";
+  return value === undefined || value === null || value === "" ? {} : { [labelFieldName]: value };
 }
 
 export function entityIri(entityType, id) {
@@ -942,12 +683,61 @@ export function objectFromBinding(binding, fields) {
 }
 
 export function triplesFromFields(subject, fields, data) {
+  const sharedLinkedEntityIds = sharedLinkedEntityIdsForFields(fields, data);
   return scalarFieldEntries(fields)
     .map(([fieldName, field]) => {
       if (field.options) return triplesFromConditionalField(subject, fieldName, field, data[fieldName]);
-      return triplesFromFieldValue(subject, field, data[fieldName]);
+      return triplesFromFieldValue(subject, field, data[fieldName], sharedLinkedEntityIds.get(linkedEntityGroupKey(field)));
     })
     .join("");
+}
+
+function linkedEntityGroupKey(field = {}) {
+  const targetEntityType = field.targetEntityType;
+  if (!targetEntityType) return null;
+  return [
+    targetEntityType,
+    field.targetTemplate || RDF.uriTemplates?.[targetEntityType] || "",
+    field.targetClass || RDF.classes?.[targetEntityType] || "",
+  ].join("|");
+}
+
+function fieldHasInputValue(value) {
+  if (Array.isArray(value)) return value.some(Boolean);
+  if (value && typeof value === "object") return Object.values(value).some(fieldHasInputValue);
+  return String(value || "").trim() !== "";
+}
+
+function firstAllocatedLinkedEntityId(value) {
+  const values = Array.isArray(value) ? value : [value];
+  const match = values.find(candidate => (
+    candidate
+    && typeof candidate === "object"
+    && candidate.id !== undefined
+    && !candidate.uri
+  ));
+  return match?.id;
+}
+
+function sharedLinkedEntityIdsForFields(fields = {}, data = {}) {
+  const entriesByKey = new Map();
+  for (const [fieldName, field] of Object.entries(fields || {})) {
+    if (!field || typeof field !== "object") continue;
+    if (!fieldHasInputValue(data[fieldName])) continue;
+    const shouldShare = field.createEntityFromInput || (isGroupField(field) && field.targetEntityType);
+    if (!shouldShare) continue;
+    const key = linkedEntityGroupKey(field);
+    if (!key) continue;
+    entriesByKey.set(key, [...(entriesByKey.get(key) || []), { field, value: data[fieldName] }]);
+  }
+
+  return new Map(Array.from(entriesByKey.entries())
+    .filter(([, entries]) => entries.length > 1)
+    .map(([key, entries]) => [
+      key,
+      entries.map(entry => firstAllocatedLinkedEntityId(entry.value) ?? entry.value?.id).find(id => id !== undefined),
+    ])
+    .filter(([, id]) => id !== undefined));
 }
 
 function valuesForField(value, field) {
@@ -969,7 +759,7 @@ function entityTriplesFromInput(entitySubject, entityType, input, field) {
   return triples;
 }
 
-function triplesFromFieldValue(subject, field, value) {
+function triplesFromFieldValue(subject, field, value, sharedId = null) {
   return valuesForField(value, field)
     .map(inputValue => {
       if (!field.createEntityFromInput) return triple(subject, field.predicate, inputValue, field);
@@ -980,7 +770,7 @@ function triplesFromFieldValue(subject, field, value) {
       const entityType = field.targetEntityType;
       const template = field.targetTemplate || (entityType ? RDF.uriTemplates?.[entityType] : null);
       const inputLabel = typeof inputValue === "object" ? inputValue.label : inputValue;
-      const inputId = typeof inputValue === "object" ? inputValue.id : slugify(inputValue);
+      const inputId = sharedId ?? (typeof inputValue === "object" ? inputValue.id : slugify(inputValue));
       const entitySubject = template
         ? applyTemplate(template, entityTemplateValues(entityType, inputId))
         : inputValue;
@@ -998,7 +788,9 @@ function triplesFromConditionalField(subject, fieldName, field, value) {
   const option = field.options?.[selectedOption];
   let triples = triplesFromConditionalOption(subject, field, selectedOption, option);
   const optionValues = typeof value === "object" ? value?.values || {} : {};
+  const sharedLinkedEntityIds = sharedLinkedEntityIdsForFields(option?.fields || {}, optionValues);
   triples += triplesFromFields(subject, option?.fields || {}, optionValues);
+  triples += triplesFromNestedGroups(subject, option?.fields || {}, optionValues, sharedLinkedEntityIds);
   return triples;
 }
 
@@ -1023,35 +815,60 @@ function triplesFromConditionalOption(subject, field, selectedOption, option = {
     + triple(subject, field.predicate, entitySubject, { ...optionField, objectType: "uri", createEntityFromInput: false });
 }
 
-export function triplesFromNestedGroups(subject, groups, data) {
+export function triplesFromNestedGroups(subject, groups, data, sharedLinkedEntityIds = sharedLinkedEntityIdsForFields(groups, data)) {
   return groupFieldEntries(groups || {})
     .map(([groupName, group]) => {
-      const groupData = data[groupName] || {};
-      const groupSubject = nestedGroupSubject(subject, groupName, group, groupData);
-      const subfieldTriples = groupSubfieldEntries(group)
-        .map(([fieldName, field]) => triplesFromFieldValue(groupSubject, field, groupData[fieldName]))
+      const rawGroupValue = data[groupName];
+      const groupValues = group.allowMultiple
+        ? (Array.isArray(rawGroupValue) ? rawGroupValue : (rawGroupValue ? [rawGroupValue] : []))
+        : [rawGroupValue || {}];
+      const sharedId = group.allowMultiple ? undefined : sharedLinkedEntityIds.get(linkedEntityGroupKey(group));
+
+      return groupValues
+        .map((rawGroupData, groupIndex) => {
+          const groupData = {
+            ...groupInputObject(group, rawGroupData),
+            ...(sharedId !== undefined ? { id: sharedId } : {}),
+          };
+          const groupSubject = nestedGroupSubject(
+            subject,
+            group.allowMultiple ? `${groupName}_${groupIndex + 1}` : groupName,
+            group,
+            groupData
+          );
+          const sharedNestedIds = sharedLinkedEntityIdsForFields(group, groupData);
+          const subfieldTriples = triplesFromFields(groupSubject, group, groupData)
+            + triplesFromNestedGroups(groupSubject, group, groupData, sharedNestedIds);
+          if (!subfieldTriples || !group.predicate) return subfieldTriples;
+          const groupTypeTriple = group.className ? rdfTypeTriple(groupSubject, group.className) : "";
+          const idFieldName = group.targetEntityType ? entityIdField(group.targetEntityType) : null;
+          const idField = idFieldName ? RDF[group.targetEntityType]?.fields?.[idFieldName] : null;
+          const idTriple = idField && groupData.id !== undefined
+            ? triple(groupSubject, idField.predicate, groupData.id, idField)
+            : "";
+          return triple(subject, group.predicate, groupSubject, { objectType: "uri" }) + groupTypeTriple + idTriple + subfieldTriples;
+        })
         .join("");
-      if (!subfieldTriples || !group.predicate) return subfieldTriples;
-      const groupTypeTriple = group.className ? rdfTypeTriple(groupSubject, group.className) : "";
-      return triple(subject, group.predicate, groupSubject, { objectType: "uri" }) + groupTypeTriple + subfieldTriples;
     })
     .join("");
 }
 
 export function reportItemTriples(item) {
   const subject = entityUri("reportItem", item.entryNumber);
+  const sharedLinkedEntityIds = sharedLinkedEntityIdsForFields(RDF.reportItem.fields, item);
   let triples = rdfTypeTriple(subject, RDF.classes.reportItem);
   triples += triplesFromFields(subject, RDF.reportItem.fields, item);
-  triples += triplesFromNestedGroups(subject, RDF.reportItem.fields, item);
+  triples += triplesFromNestedGroups(subject, RDF.reportItem.fields, item, sharedLinkedEntityIds);
 
   return triples;
 }
 
 export function reportTriples(report) {
   const subject = entityUri("report", report.id);
+  const sharedLinkedEntityIds = sharedLinkedEntityIdsForFields(RDF.report.fields, report);
   let triples = rdfTypeTriple(subject, RDF.classes.report);
   triples += triplesFromFields(subject, RDF.report.fields, report);
-  triples += triplesFromNestedGroups(subject, RDF.report.fields, report);
+  triples += triplesFromNestedGroups(subject, RDF.report.fields, report, sharedLinkedEntityIds);
   (report.selectedItemIds || []).forEach(id => {
     const field = RDF.report.fields.selectedItems;
     const value = field.targetTemplate ? applyTemplate(field.targetTemplate, { entryNumber: id, id }) : id;

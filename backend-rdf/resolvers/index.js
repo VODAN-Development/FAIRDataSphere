@@ -10,6 +10,7 @@ import {
   canWriteOrganisationData,
   createOrganisation,
   deleteOrganisation,
+  deleteOrganisationRdfStructurePreset,
   joinOrganisation,
   leaveOrganisation,
   listMyOrganisations,
@@ -66,6 +67,7 @@ import {
 
 const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "data");
 const COMPILED_REPORTS_DIR = join(DATA_DIR, "compiled-reports");
+const cleanedAppOrganisationMetadataRepositories = new Set();
 
 function maxNumericBinding(result, variableName) {
   const values = result.results.bindings
@@ -218,7 +220,57 @@ function fieldValidationError(fieldName, message) {
   return new Error(`FIELD_VALIDATION:${fieldName}:${message}`);
 }
 
-async function allocateEntityInput(fieldName, field, value, nextIds) {
+function linkedEntityGroupKey(field = {}) {
+  const targetEntityType = field.targetEntityType;
+  if (!targetEntityType) return null;
+  return [
+    targetEntityType,
+    field.targetTemplate || RDF.uriTemplates?.[targetEntityType] || "",
+    field.targetClass || RDF.classes?.[targetEntityType] || "",
+  ].join("|");
+}
+
+function fieldHasInputValue(value) {
+  if (Array.isArray(value)) return value.some(Boolean);
+  if (value && typeof value === "object") {
+    return Object.values(value).some(fieldHasInputValue);
+  }
+  return String(value || "").trim() !== "";
+}
+
+function linkedFieldEntriesForSharedEntity(fields = {}) {
+  return Object.entries(fields || {})
+    .filter(([, field]) => field && typeof field === "object")
+    .filter(([, field]) => (
+      field.createEntityFromInput
+      || (isGroupField(field) && field.targetEntityType)
+    ))
+    .map(([fieldName, field]) => [fieldName, field, linkedEntityGroupKey(field)])
+    .filter(([, , key]) => key);
+}
+
+async function sharedLinkedEntityIdsForFields(fields = {}, data = {}, nextIds) {
+  const entriesByKey = new Map();
+  for (const [fieldName, field, key] of linkedFieldEntriesForSharedEntity(fields)) {
+    if (!fieldHasInputValue(data[fieldName])) continue;
+    entriesByKey.set(key, [...(entriesByKey.get(key) || []), field]);
+  }
+
+  const sharedIds = new Map();
+  for (const [key, entries] of entriesByKey.entries()) {
+    if (entries.length < 2) continue;
+    const targetEntityType = entries[0].targetEntityType;
+    if (!nextIds.has(targetEntityType)) {
+      nextIds.set(targetEntityType, await nextEntityId(targetEntityType));
+    }
+    const id = nextIds.get(targetEntityType);
+    nextIds.set(targetEntityType, id + 1);
+    sharedIds.set(key, id);
+  }
+  return sharedIds;
+}
+
+async function allocateEntityInput(fieldName, field, value, nextIds, sharedId = null) {
   if (!field.createEntityFromInput) return value;
   const targetEntityType = field.targetEntityType;
   if (!targetEntityType) return value;
@@ -242,11 +294,13 @@ async function allocateEntityInput(fieldName, field, value, nextIds) {
       }
     }
 
-    if (!nextIds.has(targetEntityType)) {
+    if (!sharedId && !nextIds.has(targetEntityType)) {
       nextIds.set(targetEntityType, await nextEntityId(targetEntityType));
     }
-    const id = nextIds.get(targetEntityType);
-    nextIds.set(targetEntityType, id + 1);
+    const id = sharedId || nextIds.get(targetEntityType);
+    if (!sharedId) {
+      nextIds.set(targetEntityType, id + 1);
+    }
     allocatedValues.push({ id, label });
   }
 
@@ -255,13 +309,52 @@ async function allocateEntityInput(fieldName, field, value, nextIds) {
     : allocatedValues[0];
 }
 
+function groupInputObject(group, value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return { ...value };
+  const labelFieldName = group.targetLabelField
+    || groupSubfieldEntries(group).find(([fieldName]) => fieldName === "name")?.[0]
+    || groupSubfieldEntries(group)[0]?.[0]
+    || "name";
+  return value === undefined || value === null || value === "" ? {} : { [labelFieldName]: value };
+}
+
+async function allocateGroupInput(group, value, nextIds, sharedId = null) {
+  const groupValues = group.allowMultiple
+    ? (Array.isArray(value) ? value : (value ? [value] : []))
+    : [value || {}];
+  const allocatedValues = [];
+
+  for (const groupValue of groupValues) {
+    const groupData = groupInputObject(group, groupValue);
+    if (!fieldHasInputValue(groupData)) continue;
+
+    if (group.targetEntityType && groupData.id === undefined) {
+      if (sharedId) {
+        groupData.id = sharedId;
+      } else {
+        if (!nextIds.has(group.targetEntityType)) {
+          nextIds.set(group.targetEntityType, await nextEntityId(group.targetEntityType));
+        }
+        groupData.id = nextIds.get(group.targetEntityType);
+        nextIds.set(group.targetEntityType, groupData.id + 1);
+      }
+    }
+
+    allocatedValues.push(await allocateCreatedEntityInputsForFields(group, groupData, nextIds));
+  }
+
+  return group.allowMultiple ? allocatedValues : (allocatedValues[0] || value);
+}
+
 async function allocateCreatedEntityInputs(entityType, data, nextIds = new Map()) {
   const nextData = { ...data };
   const entity = RDF[entityType] || {};
+  const sharedLinkedEntityIds = await sharedLinkedEntityIdsForFields(entity.fields || {}, nextData, nextIds);
 
   for (const [fieldName, field] of Object.entries(entity.fields || {})) {
+    const sharedId = sharedLinkedEntityIds.get(linkedEntityGroupKey(field));
     if (isGroupField(field)) {
-      nextData[fieldName] = await allocateCreatedEntityInputsForFields(field, nextData[fieldName] || {}, nextIds);
+      nextData[fieldName] = await allocateGroupInput(field, nextData[fieldName], nextIds, sharedId);
       continue;
     }
     if (field.options) {
@@ -286,6 +379,10 @@ async function allocateCreatedEntityInputsForFields(fields, data, nextIds) {
   const nextData = { ...data };
   for (const [fieldName, field] of Object.entries(fields || {})) {
     if (!field || typeof field !== "object" || !field.predicate) continue;
+    if (isGroupField(field)) {
+      nextData[fieldName] = await allocateGroupInput(field, nextData[fieldName], nextIds);
+      continue;
+    }
     nextData[fieldName] = await allocateEntityInput(fieldName, field, nextData[fieldName], nextIds);
   }
   return nextData;
@@ -333,7 +430,18 @@ async function deleteNestedGroupTriplesForSubject(entityType, subject) {
   const deletes = Object.entries(RDF[entityType]?.fields || {})
     .filter(([, group]) => isGroupField(group))
     .filter(([, group]) => group?.resourceMode !== "reusable")
-    .map(([groupName]) => `DELETE WHERE { ${nestedGroupUri(subject, groupName)} ?p ?o . }`)
+    .map(([groupName, group]) => {
+      if (group.targetEntityType && group.predicate) {
+        return `DELETE {
+          ?groupSubject ?p ?o .
+        }
+        WHERE {
+          ${subject} ${group.predicate} ?groupSubject .
+          ?groupSubject ?p ?o .
+        }`;
+      }
+      return `DELETE WHERE { ${nestedGroupUri(subject, groupName)} ?p ?o . }`;
+    })
     .join(";\n");
   if (!deletes) return;
 
@@ -449,8 +557,10 @@ async function loadReportItemCollections(item) {
 }
 
 function reportItemFromBinding(binding) {
+  const item = objectFromBinding(binding, RDF.reportItem.fields);
   return {
-    ...objectFromBinding(binding, RDF.reportItem.fields),
+    uri: expandPrefixedName(entityUri("reportItem", item.entryNumber)),
+    ...item,
     ...Object.fromEntries(Object.entries(RDF.reportItem.fields || {}).filter(([, field]) => isArrayField(field) && !field.options).map(([fieldName]) => [fieldName, []])),
     ...Object.fromEntries(Object.entries(RDF.reportItem.fields || {}).filter(([, field]) => isGroupField(field)).map(([fieldName]) => [fieldName, null])),
   };
@@ -628,103 +738,21 @@ function subjectFromEntityIdentifier(entityType, id, uri) {
   return uri ? termToIri(uri) : entityUri(entityType, id);
 }
 
-function organisationDataTriple(subject, organisationId) {
-  if (!organisationId) return "";
-  return triple(subject, "sitrep:organisationId", organisationId);
-}
-
-function createdInputOrganisationTriples(entityType, data, organisationId) {
-  if (!organisationId) return "";
-  return createdInputOrganisationTriplesForFields(RDF[entityType]?.fields || {}, data, organisationId);
-}
-
-function createdInputOrganisationTriplesForFields(fields, data = {}, organisationId) {
-  return Object.entries(fields || {})
-    .flatMap(([fieldName, field]) => {
-      if (!field || typeof field !== "object") return [];
-      if (isGroupField(field)) {
-        return [createdInputOrganisationTriplesForFields(field, data[fieldName] || {}, organisationId)];
-      }
-      if (field.options) {
-        const conditionalValue = data[fieldName];
-        const selectedOption = typeof conditionalValue === "object" ? conditionalValue?.selectedOption : conditionalValue;
-        const option = field.options?.[selectedOption];
-        return option
-          ? [createdInputOrganisationTriplesForFields(option.fields || {}, conditionalValue?.values || {}, organisationId)]
-          : [];
-      }
-      if (!field.createEntityFromInput || !field.targetEntityType) return [];
-
-      const values = Array.isArray(data[fieldName]) ? data[fieldName] : [data[fieldName]];
-      return values
-        .filter(value => value && typeof value === "object" && value.id !== undefined && !value.uri)
-        .map(value => {
-          const template = field.targetTemplate || RDF.uriTemplates?.[field.targetEntityType];
-          if (!template) return "";
-          const subject = applyTemplate(template, entityTemplateValues(field.targetEntityType, value.id));
-          return organisationDataTriple(subject, organisationId);
-        });
-    })
-    .join("");
-}
-
-function organisationDataPattern(subject, organisationId) {
-  if (!organisationId) {
-    return `FILTER NOT EXISTS {
-      ${subject} sitrep:organisationId ?organisationId .
-      FILTER(DATATYPE(?organisationId) != xsd:integer)
-    }`;
-  }
-  return `${subject} sitrep:organisationId ${literal(organisationId)} .`;
-}
-
-async function ensureSubjectOrganisationData(subject, organisationId) {
-  if (!organisationId) return;
-  await runSparqlUpdate(`${PREFIXES}
-    INSERT {
-      ${subject} sitrep:organisationId ${literal(organisationId)} .
-    }
-    WHERE {
-      ${subject} ?p ?o .
-      FILTER NOT EXISTS {
-        ${subject} sitrep:organisationId ?existingOrganisationId .
-      }
-    }
-  `);
-}
-
-function scopedSubjectDelete(subject, organisationId) {
-  if (organisationId) {
-    return `DELETE WHERE {
-      ${subject} sitrep:organisationId ${literal(organisationId)} ;
-                 ?p ?o .
-    }`;
-  }
+function scopedSubjectDelete(subject) {
   return `DELETE {
     ${subject} ?p ?o .
   }
   WHERE {
     ${subject} ?p ?o .
-    ${organisationDataPattern(subject, organisationId)}
   }`;
 }
 
-function scopedReportLinkDelete(selectedItemsField, selectedItemObject, organisationId) {
-  if (organisationId) {
-    return `DELETE {
-      ?report ${selectedItemsField.predicate} ${selectedItemObject} .
-    }
-    WHERE {
-      ?report ${selectedItemsField.predicate} ${selectedItemObject} .
-      ?report sitrep:organisationId ${literal(organisationId)} .
-    }`;
-  }
+function scopedReportLinkDelete(selectedItemsField, selectedItemObject) {
   return `DELETE {
     ?report ${selectedItemsField.predicate} ${selectedItemObject} .
   }
   WHERE {
     ?report ${selectedItemsField.predicate} ${selectedItemObject} .
-    ${organisationDataPattern("?report", organisationId)}
   }`;
 }
 
@@ -751,12 +779,30 @@ async function requireOrganisationWrite(context, organisationId) {
 async function withOrganisationRepository(organisationId, callback) {
   const repositoryConfig = await organisationRepositoryConfig(organisationId);
   await applyOrganisationRdfStructure(organisationId);
-  return withRepository(repositoryConfig, callback);
+  return withRepository(repositoryConfig, async () => {
+    await deleteAppOrganisationMetadata(organisationId);
+    return callback();
+  });
 }
 
 async function applyOrganisationRdfStructure(organisationId) {
   const structureJson = await organisationRdfStructureJson(organisationId);
   applyRdfStructureFromJson(structureJson || JSON.stringify(defaultRdfStructure()));
+}
+
+async function deleteAppOrganisationMetadata(organisationId) {
+  const cleanupKey = organisationId || "no-organisation";
+  if (cleanedAppOrganisationMetadataRepositories.has(cleanupKey)) return;
+  await runSparqlUpdate(`${PREFIXES}
+    DELETE {
+      ?subject sitrep:organisationId ?organisationId .
+    }
+    WHERE {
+      ?subject sitrep:organisationId ?organisationId .
+      FILTER(DATATYPE(?organisationId) != xsd:integer)
+    }
+  `);
+  cleanedAppOrganisationMetadataRepositories.add(cleanupKey);
 }
 
 function rdfStructurePayload() {
@@ -765,6 +811,14 @@ function rdfStructurePayload() {
     reportItemFields: editableFieldEntries("reportItem"),
     reportFields: editableFieldEntries("report"),
   };
+}
+
+function presetScopeOrganisationId(organisationId, scope) {
+  return scope === "global" ? null : organisationId;
+}
+
+function isGlobalPresetScope(scope) {
+  return scope === "global";
 }
 
 async function updateActiveRdfStructure(organisationId, json) {
@@ -1488,6 +1542,14 @@ const resolvers = {
   Report: {
     fieldValues: report => fieldValuesForEntity("report", report),
   },
+  RdfStructurePreset: {
+    canDelete: async (preset, _, context) => {
+      const user = context.currentUser;
+      if (!user) return false;
+      if (preset.scope === "global") return user.role === "admin";
+      return canWriteOrganisation(user, preset.organisationId);
+    },
+  },
   Query: {
     me: async (_, __, context) => context.currentUser,
 
@@ -1516,7 +1578,6 @@ const resolvers = {
         SELECT ?item ${selectVariables(itemFields)}
         WHERE {
           ?item rdf:type ${RDF.classes.reportItem} .
-          ${organisationDataPattern("?item", organisationId)}
           ${fieldPatterns("?item", itemFields)}
         }
         ORDER BY DESC(?entryNumber)
@@ -1550,7 +1611,6 @@ const resolvers = {
         SELECT ${selectVariables(itemFields)}
         WHERE {
           ${subject} rdf:type ${RDF.classes.reportItem} .
-          ${organisationDataPattern(subject, organisationId)}
           ${fieldPatterns(subject, itemFields)}
         }
       `;
@@ -1573,7 +1633,6 @@ const resolvers = {
         WHERE {
           ?report rdf:type ${RDF.classes.report} .
           FILTER(STRSTARTS(STR(?report), "${reportIdBase}"))
-          ${organisationDataPattern("?report", organisationId)}
           ${fieldPatterns("?report", reportFields)}
           BIND(REPLACE(STR(?report), "${reportIdBase}", "") AS ?id)
           FILTER(REGEX(?id, "^[0-9]+$"))
@@ -1604,7 +1663,6 @@ const resolvers = {
         SELECT ${selectVariables(reportFields)}
         WHERE {
           ${subject} rdf:type ${RDF.classes.report} .
-          ${organisationDataPattern(subject, organisationId)}
           ${fieldPatterns(subject, reportFields)}
         }
       `;
@@ -1713,22 +1771,36 @@ const resolvers = {
       });
     },
 
-    saveRdfStructurePreset: async (_, { name, json, organisationId }, context) => {
+    saveRdfStructurePreset: async (_, { name, json, organisationId, scope }, context) => {
       const user = requireAuth(context);
-      if (!(user.role === "admin" && !organisationId)) {
+      const presetOrganisationId = presetScopeOrganisationId(organisationId, scope);
+      if (isGlobalPresetScope(scope)) {
+        if (user.role !== "admin") throw new Error("You must be an admin to save a global preset.");
+      } else if (!(user.role === "admin" && !organisationId)) {
         await requireOrganisationWrite(context, organisationId);
       }
       parseRdfStructureJson(json);
-      return saveOrganisationRdfStructurePreset(organisationId, { name, json, createdBy: user.id });
+      return saveOrganisationRdfStructurePreset(presetOrganisationId, { name, json, createdBy: user.id });
     },
 
-    loadRdfStructurePreset: async (_, { id, organisationId }, context) => {
+    loadRdfStructurePreset: async (_, { id, organisationId, scope }, context) => {
       const user = requireAuth(context);
       if (!(user.role === "admin" && !organisationId)) {
         await requireOrganisationWrite(context, organisationId);
       }
-      const json = await rdfStructurePresetJson(organisationId, id);
+      const json = await rdfStructurePresetJson(presetScopeOrganisationId(organisationId, scope), id);
       return withOrganisationRepository(organisationId, async () => updateActiveRdfStructure(organisationId, json));
+    },
+
+    deleteRdfStructurePreset: async (_, { id, organisationId, scope }, context) => {
+      const user = requireAuth(context);
+      const presetOrganisationId = presetScopeOrganisationId(organisationId, scope);
+      if (isGlobalPresetScope(scope)) {
+        if (user.role !== "admin") throw new Error("You must be an admin to delete a global preset.");
+      } else if (!(user.role === "admin" && !organisationId)) {
+        await requireOrganisationWrite(context, organisationId);
+      }
+      return deleteOrganisationRdfStructurePreset(presetOrganisationId, id);
     },
 
     createReportItemFromFields: async (_, { fieldValues, organisationId }, context) => {
@@ -1747,8 +1819,6 @@ const resolvers = {
       await syncEquivalentClassTriples();
       await runSparqlUpdate(`${PREFIXES} INSERT DATA {
         ${reportItemTriples(item)}
-        ${organisationDataTriple(entityUri("reportItem", entryNumber), organisationId)}
-        ${createdInputOrganisationTriples("reportItem", item, organisationId)}
       }`);
       return item;
       });
@@ -1761,7 +1831,6 @@ const resolvers = {
       const existing = await runSparqlQuery(`${PREFIXES}
         SELECT ?createdAt WHERE {
           ${subject} ${RDF.reportItem.fields.createdAt.predicate} ?createdAt .
-          ${organisationDataPattern(subject, organisationId)}
         }
       `);
       if (existing.results.bindings.length === 0) throw new Error("Report item not found in this organisation.");
@@ -1784,8 +1853,6 @@ const resolvers = {
       await syncEquivalentClassTriples();
       await runSparqlUpdate(`${PREFIXES} INSERT DATA {
         ${reportItemTriples(item)}
-        ${organisationDataTriple(subject, organisationId)}
-        ${createdInputOrganisationTriples("reportItem", item, organisationId)}
       }`);
       return item;
       });
@@ -1801,8 +1868,8 @@ const resolvers = {
       const selectedItemObject = objectTerm(selectedItemValue, selectedItemsField);
       await deleteNestedGroupTriples("reportItem", id);
       await runSparqlUpdate(`${PREFIXES}
-        ${scopedReportLinkDelete(selectedItemsField, selectedItemObject, organisationId)};
-        ${scopedSubjectDelete(entityUri("reportItem", id), organisationId)}
+        ${scopedReportLinkDelete(selectedItemsField, selectedItemObject)};
+        ${scopedSubjectDelete(entityUri("reportItem", id))}
       `);
       return true;
       });
@@ -1826,8 +1893,6 @@ const resolvers = {
       await syncEquivalentClassTriples();
       await runSparqlUpdate(`${PREFIXES} INSERT DATA {
         ${reportTriples(report)}
-        ${organisationDataTriple(entityUri("report", id), organisationId)}
-        ${createdInputOrganisationTriples("report", report, organisationId)}
       }`);
 
       for (const itemId of selectedItemIds || []) {
@@ -1853,7 +1918,6 @@ const resolvers = {
       const existing = await runSparqlQuery(`${PREFIXES}
         SELECT ?createdAt WHERE {
           ${subject} ${RDF.report.fields.createdAt.predicate} ?createdAt .
-          ${organisationDataPattern(subject, organisationId)}
         }
       `);
       if (existing.results.bindings.length === 0) throw new Error("Report not found in this organisation.");
@@ -1878,8 +1942,6 @@ const resolvers = {
       await syncEquivalentClassTriples();
       await runSparqlUpdate(`${PREFIXES} INSERT DATA {
         ${reportTriples(report)}
-        ${organisationDataTriple(subject, organisationId)}
-        ${createdInputOrganisationTriples("report", report, organisationId)}
       }`);
 
       for (const itemId of nextSelectedItemIds) {
@@ -1902,7 +1964,7 @@ const resolvers = {
 
       await deleteNestedGroupTriples("report", id);
       await runSparqlUpdate(`${PREFIXES}
-        ${scopedSubjectDelete(entityUri("report", id), organisationId)}
+        ${scopedSubjectDelete(entityUri("report", id))}
       `);
       return true;
       });
@@ -2026,8 +2088,6 @@ const resolvers = {
       await syncEquivalentClassTriples();
       await runSparqlUpdate(`${PREFIXES} INSERT DATA {
         ${triples}
-        ${organisationDataTriple(subject, organisationId)}
-        ${createdInputOrganisationTriples(entityType, data, organisationId)}
       }`);
 
       return rdfEntityFromObject(entityType, { ...data, uri: expandPrefixedName(subject) });
@@ -2042,10 +2102,9 @@ const resolvers = {
       if (!RDF.classes?.[entityType]) throw new Error(`Unknown RDF entity type: ${entityType}`);
 
       const subject = subjectFromEntityIdentifier(entityType, id, uri);
-      await ensureSubjectOrganisationData(subject, organisationId);
       await deleteNestedGroupTriplesForSubject(entityType, subject);
       await runSparqlUpdate(`${PREFIXES}
-        ${scopedSubjectDelete(subject, organisationId)};
+        ${scopedSubjectDelete(subject)};
         DELETE WHERE {
           ?s ?p ${subject} .
         }
@@ -2085,7 +2144,6 @@ const resolvers = {
         };
         INSERT DATA {
           ${triples}
-          ${organisationDataTriple(subject, organisationId)}
         }
       `);
 

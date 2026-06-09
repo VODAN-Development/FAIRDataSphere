@@ -632,13 +632,19 @@ function normalizeRdfStructureJson(json) {
 async function rdfPresetPayload(organisationId, preset) {
   return {
     ...preset,
+    scope: organisationId ? "organisation" : "global",
+    organisationId: organisationId || null,
     json: await readFile(rdfPresetFilePath(organisationId, preset.id), "utf8"),
   };
 }
 
 export async function listOrganisationRdfStructurePresets(organisationId) {
-  const presets = await readRdfPresetMetadata(organisationId);
-  return Promise.all(presets.map(preset => rdfPresetPayload(organisationId, preset)));
+  const organisationPresets = organisationId ? await readRdfPresetMetadata(organisationId) : [];
+  const globalPresets = await readRdfPresetMetadata(null);
+  return [
+    ...(await Promise.all(globalPresets.map(preset => rdfPresetPayload(null, preset)))),
+    ...(await Promise.all(organisationPresets.map(preset => rdfPresetPayload(organisationId, preset)))),
+  ];
 }
 
 export async function saveOrganisationRdfStructurePreset(organisationId, { name, json, createdBy }) {
@@ -666,4 +672,18 @@ export async function rdfStructurePresetJson(organisationId, presetId) {
     throw new Error("RDF structure preset not found.");
   }
   return readFile(rdfPresetFilePath(organisationId, preset.id), "utf8");
+}
+
+export async function deleteOrganisationRdfStructurePreset(organisationId, presetId) {
+  const presets = await readRdfPresetMetadata(organisationId);
+  const preset = presets.find(candidate => candidate.id === presetId);
+  if (!preset) {
+    throw new Error("RDF structure preset not found.");
+  }
+  await rm(rdfPresetFilePath(organisationId, preset.id), { force: true });
+  await writeRdfPresetMetadata(
+    organisationId,
+    presets.filter(candidate => candidate.id !== preset.id)
+  );
+  return true;
 }

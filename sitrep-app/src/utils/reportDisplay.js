@@ -10,14 +10,20 @@ export function titleForEntity(entityType) {
     .replace(/^./, char => char.toUpperCase());
 }
 
+function compactUri(value) {
+  const text = String(value || '');
+  const match = text.match(/^(https?:\/\/[^#]+[#/])([^#/]+)$/);
+  return match ? decodeURIComponent(match[2]).replace(/_/g, ' ') : text;
+}
+
 export function displayValue(field) {
   if (!field.value) return '';
   if (field.kind === 'array') {
     try {
       const value = JSON.parse(field.value);
-      return Array.isArray(value) ? value.join(', ') : value;
+      return Array.isArray(value) ? value.map(compactUri).join(', ') : compactUri(value);
     } catch {
-      return field.value;
+      return compactUri(field.value);
     }
   }
   if (field.kind === 'group' || field.kind === 'location') {
@@ -30,7 +36,8 @@ export function displayValue(field) {
     return (field.subfields || [])
       .map(subfield => {
         const value = groupValue?.[subfield.name];
-        return value ? `${subfield.label || subfield.name}: ${value}` : null;
+        const display = Array.isArray(value) ? value.map(compactUri).join(', ') : compactUri(value);
+        return display ? `${subfield.label || subfield.name}: ${display}` : null;
       })
       .filter(Boolean)
       .join(', ');
@@ -47,22 +54,24 @@ export function displayValue(field) {
     const subfieldValues = (option?.subfields || [])
       .map(subfield => {
         const value = conditionalValue?.values?.[subfield.name];
-        const display = Array.isArray(value) ? value.filter(Boolean).join(', ') : value;
+        const display = Array.isArray(value) ? value.filter(Boolean).map(compactUri).join(', ') : compactUri(value);
         return display ? `${subfield.label || subfield.name}: ${display}` : null;
       })
       .filter(Boolean);
     return [optionLabel, ...subfieldValues].filter(Boolean).join(', ');
   }
-  return field.value;
+  return compactUri(field.value);
 }
 
 export function itemTitle(item) {
-  const primaryValue = item.fieldValues.find(field => field.value && field.kind === 'scalar')?.value;
+  const primaryField = item.fieldValues.find(field => field.value && field.kind === 'scalar');
+  const primaryValue = primaryField ? displayValue(primaryField) : '';
   return `Entry #${item.entryNumber}${primaryValue ? `: ${primaryValue}` : ''}`;
 }
 
 export function reportTitle(report) {
-  return report.fieldValues?.find(field => field.value && field.kind === 'scalar')?.value || `#${report.id}`;
+  const primaryField = report.fieldValues?.find(field => field.value && field.kind === 'scalar');
+  return primaryField ? displayValue(primaryField) : `#${report.id}`;
 }
 
 export function formatTimestamp(value) {

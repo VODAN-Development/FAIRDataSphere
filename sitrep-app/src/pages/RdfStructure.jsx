@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, gql } from '@apollo/client';
 import OrganisationGate from '../components/OrganisationGate.jsx';
+import { useAuth } from '../auth/useAuth.js';
 import { useOrganisationContext } from '../auth/useOrganisationContext.js';
 
 const GET_RDF_STRUCTURE = gql`
@@ -12,6 +13,8 @@ const GET_RDF_STRUCTURE = gql`
       id
       name
       json
+      scope
+      canDelete
       createdAt
       updatedAt
     }
@@ -27,11 +30,13 @@ const UPDATE_RDF_STRUCTURE = gql`
 `;
 
 const SAVE_RDF_STRUCTURE_PRESET = gql`
-  mutation SaveRdfStructurePreset($name: String!, $json: String!, $organisationId: ID) {
-    saveRdfStructurePreset(name: $name, json: $json, organisationId: $organisationId) {
+  mutation SaveRdfStructurePreset($name: String!, $json: String!, $organisationId: ID, $scope: String) {
+    saveRdfStructurePreset(name: $name, json: $json, organisationId: $organisationId, scope: $scope) {
       id
       name
       json
+      scope
+      canDelete
       createdAt
       updatedAt
     }
@@ -39,10 +44,16 @@ const SAVE_RDF_STRUCTURE_PRESET = gql`
 `;
 
 const LOAD_RDF_STRUCTURE_PRESET = gql`
-  mutation LoadRdfStructurePreset($id: ID!, $organisationId: ID) {
-    loadRdfStructurePreset(id: $id, organisationId: $organisationId) {
+  mutation LoadRdfStructurePreset($id: ID!, $organisationId: ID, $scope: String) {
+    loadRdfStructurePreset(id: $id, organisationId: $organisationId, scope: $scope) {
       json
     }
+  }
+`;
+
+const DELETE_RDF_STRUCTURE_PRESET = gql`
+  mutation DeleteRdfStructurePreset($id: ID!, $organisationId: ID, $scope: String) {
+    deleteRdfStructurePreset(id: $id, organisationId: $organisationId, scope: $scope)
   }
 `;
 
@@ -86,7 +97,7 @@ const classPropertyOptions = [
   'schema:about',
 ];
 
-const groupPropertyNames = new Set(['label', 'predicate', 'inputType', 'required', 'resourceMode', 'className', 'targetEntityType', 'targetClass', 'targetTemplate', 'targetLabelField']);
+const groupPropertyNames = new Set(['label', 'predicate', 'inputType', 'required', 'resourceMode', 'className', 'targetEntityType', 'targetClass', 'targetTemplate', 'targetLabelField', 'importedFields']);
 const protectedEntityTypes = new Set(['report', 'reportItem']);
 
 function downloadJsonFile(filename, json) {
@@ -171,12 +182,13 @@ function datatypeDisplayValue(field) {
   if (isLinkedField(field) || field.inputType === 'uri' || field.inputType === 'uri-list' || field.objectType === 'uri') {
     return 'uri';
   }
-  if (field.kind === 'group' || field.kind === 'conditional') return '';
+  if (field.kind === 'group' || field.kind === 'importClass' || field.kind === 'conditional') return '';
   return field.datatype || '';
 }
 
 function datatypeIsLocked(field) {
   return field.kind === 'group'
+    || field.kind === 'importClass'
     || field.kind === 'array'
     || field.kind === 'conditional'
     || isLinkedField(field)
@@ -215,7 +227,7 @@ function rowsFromFields(fields, editableFieldNames = []) {
 }
 
 function fieldKind(field = {}) {
-  if (isGroupField(field)) return 'group';
+  if (isGroupField(field)) return field.inputType === 'import-class' ? 'importClass' : 'group';
   if (field.options) return 'conditional';
   if (field.allowMultiple || field.inputType === 'text-list' || field.inputType === 'uri-list') return 'array';
   return 'scalar';
@@ -531,6 +543,94 @@ function linkTargetEntriesForEntity(structure, entityType) {
     }));
 }
 
+function importableFieldEntriesForEntity(structure, entityType) {
+  const entity = structure?.[entityType] || {};
+  const fields = {
+    ...(entity.fields || {}),
+    ...(entity.arrays || {}),
+    ...(entity.nested || {}),
+  };
+  const usedNames = new Set();
+  const entries = [];
+
+  Object.entries(fields)
+    .filter(([, field]) => !field?.generated && !field?.metadataOnly)
+    .forEach(([fieldName, field]) => {
+      const name = uniqueName(fieldName, usedNames);
+      usedNames.add(name);
+      entries.push({
+        key: fieldName,
+        name,
+        label: field.label || labelForFieldName(fieldName),
+        field,
+      });
+    });
+
+  return entries;
+}
+
+function importedSubfieldFromEntry(entry) {
+  const field = omitKeys(entry.field || {}, ['generated', 'metadataOnly', 'variable']);
+  const row = withDefaultDatatype({
+    ...field,
+    name: entry.name,
+    label: entry.label,
+    kind: fieldKind(entry.field),
+    predicate: entry.field?.predicate || `sitrep:${entry.name}`,
+  });
+  if (isGroupField(entry.field)) {
+    row.subfields = groupSubfieldEntries(entry.field)
+      .map(([subfieldName, subfield]) => importedSubfieldFromEntry({
+        key: `${entry.key}.${subfieldName}`,
+        name: subfieldName,
+        label: subfield.label || labelForFieldName(subfieldName),
+        field: subfield,
+      }));
+  }
+  if (entry.field?.options) {
+    row.options = Object.entries(entry.field.options).map(([optionName, option]) => ({
+      ...option,
+      name: optionName,
+      label: option.label || optionName,
+      value: option.value || classForOption(optionName),
+      subfields: Object.entries(option.fields || {})
+        .map(([subfieldName, subfield]) => importedSubfieldFromEntry({
+          key: `${entry.key}.${optionName}.${subfieldName}`,
+          name: subfieldName,
+          label: subfield.label || labelForFieldName(subfieldName),
+          field: subfield,
+        })),
+    }));
+  }
+  return row;
+}
+
+function importClassRowDefaults(structure, row, targetEntityType = row.targetEntityType, selectedKeys = null) {
+  const entries = importableFieldEntriesForEntity(structure, targetEntityType);
+  const selectedFieldSet = new Set(selectedKeys || entries.map(entry => entry.key));
+  const selectedEntries = entries.filter(entry => (
+    selectedFieldSet.has(entry.key)
+    || [...selectedFieldSet].some(key => String(key).startsWith(`${entry.key}.`))
+  ));
+  const importedFields = selectedEntries.map(entry => entry.key);
+  const nextRow = {
+    ...row,
+    kind: 'importClass',
+    inputType: 'import-class',
+    predicate: row.predicate || importClassPredicateForEntity(targetEntityType, row.name),
+    resourceMode: 'per-instance',
+    ...linkedGroupDefaults(structure, row, targetEntityType),
+    importedFields,
+    subfields: selectedEntries.map(importedSubfieldFromEntry),
+  };
+  delete nextRow.targetLabelField;
+  return nextRow;
+}
+
+function importClassPredicateForEntity(entityType, fallbackName = 'field') {
+  return entityType ? `sitrep:has${capitalizeLocalName(entityType)}` : `sitrep:${fallbackName}`;
+}
+
 function uriTemplateToken(template) {
   return String(template || '').match(/\{([^}]+)\}/)?.[1];
 }
@@ -636,7 +736,7 @@ function omitKeys(value, keys) {
 }
 
 function persistFieldFromRow(row) {
-  const field = omitKeys(row, ['name', 'kind', 'isNew', 'subfields', 'variable', 'options', 'previousPredicates', 'direction']);
+  const field = omitKeys(row, ['name', 'kind', 'isNew', 'subfields', 'variable', 'options', 'previousPredicates', 'direction', 'importedFields']);
   if (isLinkedField(row)) {
     field.objectType = 'uri';
     field.createEntityFromInput = true;
@@ -668,49 +768,72 @@ function persistFieldFromRow(row) {
   return field;
 }
 
+function persistStructuredFieldFromRow(row) {
+  if (row.kind === 'conditional') {
+    const field = {
+      ...persistFieldFromRow(row),
+      inputType: 'select',
+      objectType: 'uri',
+      options: Object.fromEntries(
+        (row.options || [])
+          .filter(option => option.name)
+          .map(option => [
+            option.name,
+            {
+              ...persistOptionFromRow(option),
+              label: option.label || option.name,
+              value: option.value || classForOption(option.name),
+              fields: Object.fromEntries(
+                (option.subfields || [])
+                  .filter(subfield => subfield.name && subfield.predicate)
+                  .map(subfield => [subfield.name, persistStructuredFieldFromRow(subfield)])
+              ),
+            },
+          ])
+      ),
+    };
+    return field;
+  }
+
+  if (row.kind === 'group' || row.kind === 'importClass') {
+    const group = omitKeys(row, ['name', 'kind', 'isNew', 'subfields', 'datatype', 'variable', 'options', 'previousPredicates', 'direction']);
+    if (row.kind !== 'importClass') {
+      delete group.importedFields;
+    } else {
+      delete group.targetLabelField;
+    }
+    const subfields = row.kind === 'importClass'
+      ? [...(row.subfields || [])].sort((left, right) => (
+          (row.importedFields || []).findIndex(key => String(key).split('.').pop() === left.name)
+          - (row.importedFields || []).findIndex(key => String(key).split('.').pop() === right.name)
+        ))
+      : (row.subfields || []);
+    return {
+      ...group,
+      inputType: row.kind === 'importClass' ? 'import-class' : (group.inputType || 'location'),
+      resourceMode: 'per-instance',
+      ...Object.fromEntries(
+        subfields
+          .filter(subfield => subfield.name && subfield.predicate)
+          .map(subfield => [subfield.name, persistStructuredFieldFromRow(subfield)])
+      ),
+    };
+  }
+
+  return persistFieldFromRow(row);
+}
+
 function fieldsFromRows(rows) {
   return Object.fromEntries(
     rows
-      .filter(row => ['scalar', 'conditional', 'array', 'group'].includes(row.kind) && row.name && row.predicate)
+      .filter(row => ['scalar', 'conditional', 'array', 'group', 'importClass'].includes(row.kind) && row.name && row.predicate)
       .map((row) => {
-        const field = persistFieldFromRow(row);
         if (row.kind === 'conditional') {
-          field.inputType = 'select';
-          field.objectType = 'uri';
-          field.options = Object.fromEntries(
-            (row.options || [])
-              .filter(option => option.name)
-              .map(option => [
-                option.name,
-                {
-                  ...persistOptionFromRow(option),
-                  label: option.label || option.name,
-                  value: option.value || classForOption(option.name),
-                  fields: Object.fromEntries(
-                    (option.subfields || [])
-                      .filter(subfield => subfield.name && subfield.predicate)
-                      .map(subfield => [subfield.name, persistFieldFromRow(subfield)])
-                  ),
-                },
-              ])
-          );
-        } else if (row.kind === 'group') {
-          const group = omitKeys(row, ['name', 'kind', 'isNew', 'subfields', 'datatype', 'variable', 'options', 'previousPredicates', 'direction']);
-          return [
-            row.name,
-            {
-              ...group,
-              inputType: group.inputType || 'location',
-              resourceMode: 'per-instance',
-              ...Object.fromEntries(
-                (row.subfields || [])
-                  .filter(subfield => subfield.name && subfield.predicate)
-                  .map(subfield => [subfield.name, persistFieldFromRow(subfield)])
-              ),
-            },
-          ];
+          return [row.name, persistStructuredFieldFromRow(row)];
+        } else if (row.kind === 'group' || row.kind === 'importClass') {
+          return [row.name, persistStructuredFieldFromRow(row)];
         }
-        return [row.name, field];
+        return [row.name, persistStructuredFieldFromRow(row)];
       })
   );
 }
@@ -758,6 +881,94 @@ function applyDefaultDatatypesToStructure(structure) {
       nextStructure[entityType] = {
         ...nextStructure[entityType],
         fields: applyDefaultDatatypesToFields(nextStructure[entityType].fields),
+      };
+    }
+  });
+  return nextStructure;
+}
+
+function refreshImportedClassField(structure, field) {
+  if (field?.inputType !== 'import-class' || !field.targetEntityType) return field;
+  const entries = importableFieldEntriesForEntity(structure, field.targetEntityType);
+  const importedFields = Array.isArray(field.importedFields)
+    ? field.importedFields
+    : entries.map(entry => entry.key);
+  const importedFieldSet = new Set(importedFields);
+  const oldSubfieldNames = groupSubfieldEntries(field).map(([fieldName]) => fieldName);
+  const base = omitKeys(field, oldSubfieldNames);
+  const refreshedSubfields = entries
+    .filter(entry => importedFieldSet.has(entry.key))
+    .map(importedSubfieldFromEntry);
+
+  return {
+    ...base,
+    className: structure?.classes?.[field.targetEntityType] || field.className,
+    targetClass: structure?.classes?.[field.targetEntityType] || field.targetClass,
+    targetTemplate: structure?.uriTemplates?.[field.targetEntityType] || field.targetTemplate,
+    importedFields,
+    ...Object.fromEntries(
+      refreshedSubfields
+        .filter(subfield => subfield.name && subfield.predicate)
+        .map(subfield => [subfield.name, persistStructuredFieldFromRow(subfield)])
+    ),
+  };
+}
+
+function refreshImportedClassFieldsInFields(structure, fields = {}) {
+  return Object.fromEntries(
+    Object.entries(fields || {}).map(([fieldName, field]) => {
+      if (!field || typeof field !== 'object') return [fieldName, field];
+      const refreshedField = refreshImportedClassField(structure, field);
+
+      if (refreshedField.inputType === 'import-class') {
+        return [fieldName, refreshedField];
+      }
+
+      if (refreshedField.options) {
+        return [
+          fieldName,
+          {
+            ...refreshedField,
+            options: Object.fromEntries(
+              Object.entries(refreshedField.options || {}).map(([optionName, option]) => [
+                optionName,
+                {
+                  ...option,
+                  fields: refreshImportedClassFieldsInFields(structure, option.fields || {}),
+                },
+              ])
+            ),
+          },
+        ];
+      }
+
+      if (isGroupField(refreshedField)) {
+        const subfieldEntries = groupSubfieldEntries(refreshedField);
+        const base = omitKeys(refreshedField, subfieldEntries.map(([subfieldName]) => subfieldName));
+        return [
+          fieldName,
+          {
+            ...base,
+            ...refreshImportedClassFieldsInFields(
+              structure,
+              Object.fromEntries(subfieldEntries)
+            ),
+          },
+        ];
+      }
+
+      return [fieldName, refreshedField];
+    })
+  );
+}
+
+function refreshImportedClassFieldsInStructure(structure) {
+  const nextStructure = { ...structure };
+  Object.keys({ ...(nextStructure.classes || {}), ...(nextStructure.uriTemplates || {}) }).forEach(entityType => {
+    if (nextStructure[entityType]?.fields) {
+      nextStructure[entityType] = {
+        ...nextStructure[entityType],
+        fields: refreshImportedClassFieldsInFields(nextStructure, nextStructure[entityType].fields),
       };
     }
   });
@@ -1054,6 +1265,7 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
   const [dragIndex, setDragIndex] = useState(null);
   const [collapsedSections, setCollapsedSections] = useState({});
   const linkableEntityTypes = Object.keys(structure?.classes || {}).filter(entityType => entityType !== selectedEntityType);
+  const showLinkToClassControls = false;
 
   const sectionKey = (row, index, suffix) => `${row.name || `field-${index}`}-${suffix}`;
   const toggleSection = (key) => {
@@ -1078,6 +1290,7 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
           nextRow.predicate = nextRow.predicate || `sitrep:${nextRow.name}`;
           nextRow.allowMultiple = isLinkedField(nextRow) ? true : nextRow.allowMultiple;
           delete nextRow.subfields;
+          delete nextRow.importedFields;
           delete nextRow.variable;
         } else if (value === 'group') {
           delete nextRow.inputType;
@@ -1087,7 +1300,18 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
           nextRow.resourceMode = 'per-instance';
           nextRow.subfields = nextRow.subfields?.length ? nextRow.subfields : defaultSubfieldsFor(nextRow);
           Object.assign(nextRow, clearLinkedFieldSettings(nextRow));
+          delete nextRow.importedFields;
           delete nextRow.options;
+        } else if (value === 'importClass') {
+          const targetEntityType = nextRow.targetEntityType || linkableEntityTypes[0] || '';
+          Object.assign(nextRow, importClassRowDefaults(structure, {
+            ...nextRow,
+            predicate: importClassPredicateForEntity(targetEntityType, nextRow.name),
+          }, targetEntityType));
+          delete nextRow.datatype;
+          delete nextRow.objectType;
+          delete nextRow.options;
+          delete nextRow.variable;
         } else if (value === 'conditional') {
           nextRow.inputType = 'select';
           delete nextRow.datatype;
@@ -1095,6 +1319,7 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
           nextRow.options = nextRow.options?.length ? nextRow.options : [newOptionFor(nextRow)];
           Object.assign(nextRow, clearLinkedFieldSettings(nextRow));
           delete nextRow.subfields;
+          delete nextRow.importedFields;
           delete nextRow.variable;
         } else {
           nextRow.inputType = nextRow.inputType === 'text-list' || nextRow.inputType === 'uri-list' || nextRow.inputType === 'location' ? 'text' : (nextRow.inputType || 'text');
@@ -1109,6 +1334,7 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
           nextRow.predicate = nextRow.predicate || `sitrep:${nextRow.name}`;
           delete nextRow.variable;
           delete nextRow.subfields;
+          delete nextRow.importedFields;
           delete nextRow.options;
         }
       }
@@ -1132,6 +1358,13 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
         };
       }
       if (key === 'targetEntityType') {
+        if (nextRow.kind === 'importClass') {
+          return importClassRowDefaults(structure, {
+            ...nextRow,
+            targetLabelField: '',
+            predicate: importClassPredicateForEntity(value, nextRow.name),
+          }, value);
+        }
         if (nextRow.kind === 'group') {
           return {
             ...nextRow,
@@ -1145,6 +1378,9 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
       }
       if (key === 'inputType') {
         return applyInputTypeDefaults(nextRow, value);
+      }
+      if (key === 'importedFields') {
+        return importClassRowDefaults(structure, nextRow, nextRow.targetEntityType, value);
       }
       return nextRow;
     }));
@@ -1167,6 +1403,37 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
         nextField.datatype = datatypeByInputType[nextInputType];
         if (nextInputType === 'uri-list') nextField.objectType = 'uri';
         nextField.allowMultiple = isLinkedField(nextField) ? true : nextField.allowMultiple;
+        delete nextField.subfields;
+        delete nextField.importedFields;
+        delete nextField.options;
+      } else if (value === 'group') {
+        delete nextField.inputType;
+        delete nextField.datatype;
+        delete nextField.objectType;
+        nextField.predicate = nextField.predicate || predicateForSubfield(parentName, nextField.name);
+        nextField.resourceMode = 'per-instance';
+        nextField.subfields = nextField.subfields?.length ? nextField.subfields : defaultSubfieldsFor(nextField);
+        Object.assign(nextField, clearLinkedFieldSettings(nextField));
+        delete nextField.importedFields;
+        delete nextField.options;
+      } else if (value === 'importClass') {
+        const targetEntityType = nextField.targetEntityType || linkableEntityTypes[0] || '';
+        Object.assign(nextField, importClassRowDefaults(structure, {
+          ...nextField,
+          predicate: nextField.predicate || importClassPredicateForEntity(targetEntityType, nextField.name),
+        }, targetEntityType));
+        delete nextField.datatype;
+        delete nextField.objectType;
+        delete nextField.options;
+      } else if (value === 'conditional') {
+        nextField.inputType = 'select';
+        delete nextField.datatype;
+        delete nextField.objectType;
+        nextField.predicate = nextField.predicate || predicateForSubfield(parentName, nextField.name);
+        nextField.options = nextField.options?.length ? nextField.options : [newOptionFor(nextField)];
+        Object.assign(nextField, clearLinkedFieldSettings(nextField));
+        delete nextField.subfields;
+        delete nextField.importedFields;
       } else {
         nextField.inputType = nextField.inputType === 'uri-list' || nextField.inputType === 'text-list' ? 'text' : (nextField.inputType || 'text');
         if (isLinkedField(nextField)) {
@@ -1177,6 +1444,9 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
         } else {
           nextField.datatype = nextField.datatype || datatypeByInputType[nextField.inputType] || '';
         }
+        delete nextField.subfields;
+        delete nextField.importedFields;
+        delete nextField.options;
       }
     }
     if (key === 'linkedEnabled') {
@@ -1191,10 +1461,20 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
       };
     }
     if (key === 'targetEntityType') {
+      if (nextField.kind === 'importClass') {
+        return importClassRowDefaults(structure, {
+          ...nextField,
+          targetLabelField: '',
+          predicate: importClassPredicateForEntity(value, nextField.name),
+        }, value);
+      }
       return {
         ...nextField,
         ...linkedFieldDefaults(structure, { ...nextField, targetLabelField: '' }, value),
       };
+    }
+    if (key === 'importedFields') {
+      return importClassRowDefaults(structure, nextField, nextField.targetEntityType, value);
     }
     if (key === 'inputType' && Object.hasOwn(datatypeByInputType, value)) {
       nextField.datatype = datatypeByInputType[value];
@@ -1375,13 +1655,89 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
     </div>
   );
 
-  const renderSubfieldEditor = (subfield, subfieldIndex, onFieldChange, onRemove, keyPrefix) => (
+  const renderSubfieldEditor = (subfield, subfieldIndex, onFieldChange, onRemove, keyPrefix) => {
+    const updateNestedSubfield = (nestedIndex, key, value) => {
+      onFieldChange('subfields', (subfield.subfields || []).map((nestedSubfield, index) => (
+        index === nestedIndex
+          ? updateNestedFieldForKind(
+              nestedSubfield,
+              key,
+              value,
+              (subfield.subfields || []).filter((_, candidateIndex) => candidateIndex !== nestedIndex),
+              subfield.name
+            )
+          : nestedSubfield
+      )));
+    };
+    const addNestedSubfield = () => onFieldChange('subfields', [...(subfield.subfields || []), newSubfieldFor(subfield)]);
+    const removeNestedSubfield = (nestedIndex) => {
+      onFieldChange('subfields', (subfield.subfields || []).filter((_, index) => index !== nestedIndex));
+    };
+    const updateNestedOption = (optionIndex, key, value) => {
+      onFieldChange('options', (subfield.options || []).map((option, index) => {
+        if (index !== optionIndex) return option;
+        const nextOption = {
+          ...option,
+          [key]: value,
+          ...(key === 'label' && (option.isNew || subfield.isNew)
+            ? (() => {
+                const nextName = uniqueName(
+                  nameFromLabel(value, 'option'),
+                  new Set((subfield.options || []).filter((_, candidateIndex) => candidateIndex !== optionIndex).map(candidate => candidate.name))
+                );
+                return { name: nextName, value: classForOption(nextName) };
+              })()
+            : {}),
+        };
+        return nextOption;
+      }));
+    };
+    const updateNestedOptionSubfield = (optionIndex, optionSubfieldIndex, key, value) => {
+      onFieldChange('options', (subfield.options || []).map((option, index) => {
+        if (index !== optionIndex) return option;
+        return {
+          ...option,
+          subfields: (option.subfields || []).map((optionSubfield, candidateIndex) => (
+            candidateIndex === optionSubfieldIndex
+              ? updateNestedFieldForKind(
+                  optionSubfield,
+                  key,
+                  value,
+                  (option.subfields || []).filter((_, siblingIndex) => siblingIndex !== optionSubfieldIndex),
+                  option.name
+                )
+              : optionSubfield
+          )),
+        };
+      }));
+    };
+    const addNestedOption = () => onFieldChange('options', [...(subfield.options || []), newOptionFor(subfield)]);
+    const removeNestedOption = (optionIndex) => {
+      onFieldChange('options', (subfield.options || []).filter((_, index) => index !== optionIndex));
+    };
+    const addNestedOptionSubfield = (optionIndex) => {
+      onFieldChange('options', (subfield.options || []).map((option, index) => (
+        index === optionIndex ? { ...option, subfields: [...(option.subfields || []), newSubfieldFor(option)] } : option
+      )));
+    };
+    const removeNestedOptionSubfield = (optionIndex, optionSubfieldIndex) => {
+      onFieldChange('options', (subfield.options || []).map((option, index) => (
+        index === optionIndex
+          ? { ...option, subfields: (option.subfields || []).filter((_, candidateIndex) => candidateIndex !== optionSubfieldIndex) }
+          : option
+      )));
+    };
+
+    return (
     <div key={`${keyPrefix}-${subfield.isNew ? 'new-subfield' : subfield.name}-${subfieldIndex}`} className="rdf-subfield-item">
       <div className="rdf-subfield-row">
         <input value={subfield.label || ''} onChange={(e) => onFieldChange('label', e.target.value)} />
         <select value={subfield.kind || 'scalar'} onChange={(e) => onFieldChange('kind', e.target.value)}>
           <option value="scalar">Single value</option>
           <option value="array">Multiple values</option>
+          <option value="group">Subfields</option>
+          <option value="importClass">Import class</option>
+          <option value="conditional">Conditional subfields</option>
         </select>
         <input value={subfield.predicate || ''} onChange={(e) => onFieldChange('predicate', e.target.value)} />
         <DatatypeInput
@@ -1393,13 +1749,19 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
         <select
           value={subfield.inputType || (subfield.kind === 'array' ? 'text-list' : 'text')}
           onChange={(e) => onFieldChange('inputType', e.target.value)}
-          disabled={isLinkedField(subfield)}
+          disabled={isLinkedField(subfield) || subfield.kind === 'group' || subfield.kind === 'importClass' || subfield.kind === 'conditional'}
         >
           {subfield.kind === 'array' ? (
             <>
               <option value="text-list">Text list</option>
               <option value="uri-list">URI list</option>
             </>
+          ) : subfield.kind === 'conditional' ? (
+            <option value="select">Subfields</option>
+          ) : subfield.kind === 'importClass' ? (
+            <option value="import-class">Imported fields</option>
+          ) : subfield.kind === 'group' ? (
+            <option value="text">Subfields</option>
           ) : (
             <>
               <option value="text">Text</option>
@@ -1416,13 +1778,123 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
         <input type="checkbox" checked={!!subfield.encrypted} onChange={(e) => onFieldChange('encrypted', e.target.checked)} />
         <button type="button" className="delete-btn" onClick={onRemove}>Remove</button>
       </div>
-      {(subfield.kind === 'scalar' || subfield.kind === 'array') && linkedSettingsFor(
+      {showLinkToClassControls && (subfield.kind === 'scalar' || subfield.kind === 'array') && linkedSettingsFor(
         subfield,
         onFieldChange,
         `Link ${subfield.label || subfield.name} to a class`
       )}
+      {subfield.kind === 'importClass' && (
+        <div className="rdf-subfields rdf-import-class-settings">
+          <div className="rdf-subfields-title">
+            <span>Import class fields for {subfield.label || subfield.name}</span>
+          </div>
+          <div className="rdf-link-grid">
+            <div className="rdf-link-control">
+              <HelpHeader help={columnHelp.linkedClass}>Class</HelpHeader>
+              <select value={subfield.targetEntityType || ''} onChange={(e) => onFieldChange('targetEntityType', e.target.value)}>
+                <option value="">-- select --</option>
+                {linkableEntityTypes.map(entityType => (
+                  <option key={entityType} value={entityType}>{entityType}</option>
+                ))}
+              </select>
+            </div>
+            <div className="rdf-link-control">
+              <HelpHeader help={columnHelp.linkedClass}>Class value</HelpHeader>
+              <input value={structure?.classes?.[subfield.targetEntityType] || ''} readOnly />
+            </div>
+          </div>
+          {(() => {
+            const importableFields = importableFieldEntriesForEntity(structure, subfield.targetEntityType);
+            const selectedFields = new Set(subfield.importedFields || importableFields.map(field => field.key));
+            return (
+              <div className="rdf-import-field-list">
+                {importableFields.map(field => (
+                  <label key={field.key} className="rdf-import-field-option">
+                    <input
+                      type="checkbox"
+                      checked={selectedFields.has(field.key)}
+                      onChange={(e) => {
+                        const nextFields = e.target.checked
+                          ? [...selectedFields, field.key]
+                          : [...selectedFields].filter(key => key !== field.key);
+                        onFieldChange('importedFields', nextFields);
+                      }}
+                    />
+                    <span>{field.label}</span>
+                    <code>{field.field?.predicate}</code>
+                  </label>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      )}
+      {subfield.kind === 'group' && (
+        <div className="rdf-subfields">
+          <div className="rdf-subfields-title">
+            <span>Subfields for {subfield.label || subfield.name}</span>
+          </div>
+          <div className="rdf-subfield-heading">
+            <HelpHeader help={columnHelp.label}>Label</HelpHeader>
+            <HelpHeader help={columnHelp.valueMode}>Value Mode</HelpHeader>
+            <HelpHeader help={columnHelp.predicate}>Predicate</HelpHeader>
+            <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
+            <HelpHeader help={columnHelp.input}>Input</HelpHeader>
+            <HelpHeader help={columnHelp.encrypted}>Encrypt</HelpHeader>
+            <ActionHeaderSpacer />
+          </div>
+          {(subfield.subfields || []).map((nestedSubfield, nestedIndex) => renderSubfieldEditor(
+            nestedSubfield,
+            nestedIndex,
+            (key, value) => updateNestedSubfield(nestedIndex, key, value),
+            () => removeNestedSubfield(nestedIndex),
+            `${keyPrefix}-nested`
+          ))}
+          <button type="button" className="secondary-btn" onClick={addNestedSubfield}>+ Add Subfield</button>
+        </div>
+      )}
+      {subfield.kind === 'conditional' && (
+        <div className="rdf-subfields rdf-conditional-options">
+          <div className="rdf-subfields-title">
+            <span>Options for {subfield.label || subfield.name}</span>
+          </div>
+          {(subfield.options || []).map((option, optionIndex) => (
+            <div key={`${option.isNew || subfield.isNew ? 'new-option' : option.name}-${optionIndex}`} className="rdf-option-block">
+              <div className="rdf-option-heading">
+                <HelpHeader help={columnHelp.label}>Label</HelpHeader>
+                <HelpHeader help={columnHelp.optionValue}>URI Value</HelpHeader>
+                <ActionHeaderSpacer />
+              </div>
+              <div className="rdf-option-row">
+                <input value={option.label || ''} onChange={(e) => updateNestedOption(optionIndex, 'label', e.target.value)} />
+                <input value={option.value || ''} onChange={(e) => updateNestedOption(optionIndex, 'value', e.target.value)} />
+                <button type="button" className="delete-btn" onClick={() => removeNestedOption(optionIndex)}>Remove</button>
+              </div>
+              <div className="rdf-subfield-heading">
+                <HelpHeader help={columnHelp.label}>Label</HelpHeader>
+                <HelpHeader help={columnHelp.valueMode}>Value Mode</HelpHeader>
+                <HelpHeader help={columnHelp.predicate}>Predicate</HelpHeader>
+                <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
+                <HelpHeader help={columnHelp.input}>Input</HelpHeader>
+                <HelpHeader help={columnHelp.encrypted}>Encrypt</HelpHeader>
+                <ActionHeaderSpacer />
+              </div>
+              {(option.subfields || []).map((optionSubfield, optionSubfieldIndex) => renderSubfieldEditor(
+                optionSubfield,
+                optionSubfieldIndex,
+                (key, value) => updateNestedOptionSubfield(optionIndex, optionSubfieldIndex, key, value),
+                () => removeNestedOptionSubfield(optionIndex, optionSubfieldIndex),
+                `${keyPrefix}-option-subfield`
+              ))}
+              <button type="button" className="secondary-btn" onClick={() => addNestedOptionSubfield(optionIndex)}>+ Add Subfield</button>
+            </div>
+          ))}
+          <button type="button" className="secondary-btn" onClick={addNestedOption}>+ Add Option</button>
+        </div>
+      )}
     </div>
-  );
+    );
+  };
 
   return (
     <div className="rdf-editor-section">
@@ -1468,6 +1940,7 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
               <option value="scalar">Single value</option>
               <option value="array">Multiple values</option>
               <option value="group">Subfields</option>
+              <option value="importClass">Import class</option>
               <option value="conditional">Conditional subfields</option>
             </select>
             <input
@@ -1482,7 +1955,7 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
             <select
               value={row.inputType || (row.kind === 'array' ? 'text-list' : 'text')}
               onChange={(e) => updateRow(index, 'inputType', e.target.value)}
-              disabled={isLinkedField(row) || row.kind === 'group' || row.kind === 'conditional'}
+              disabled={isLinkedField(row) || row.kind === 'group' || row.kind === 'importClass' || row.kind === 'conditional'}
             >
               {row.kind === 'array' ? (
                 <>
@@ -1491,6 +1964,8 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
                 </>
               ) : row.kind === 'conditional' ? (
                 <option value="select">Subfields</option>
+              ) : row.kind === 'importClass' ? (
+                <option value="import-class">Imported fields</option>
               ) : row.kind === 'group' ? (
                 <option value="text">Subfields</option>
               ) : (
@@ -1507,7 +1982,7 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
             <input type="checkbox" checked={!!row.required} onChange={(e) => updateRow(index, 'required', e.target.checked)} />
             <input type="checkbox" checked={!!row.encrypted} onChange={(e) => updateRow(index, 'encrypted', e.target.checked)} />
             <button type="button" className="delete-btn" onClick={() => onRemove(index)}>Remove</button>
-            {(row.kind === 'scalar' || row.kind === 'array') && (
+            {showLinkToClassControls && (row.kind === 'scalar' || row.kind === 'array') && (
               <div className="rdf-subfields rdf-link-settings">
                 <div className="rdf-subfields-title">
                   <label className="rdf-link-toggle">
@@ -1543,9 +2018,55 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
                 </div>}
               </div>
             )}
+            {row.kind === 'importClass' && (
+              <div className="rdf-subfields rdf-import-class-settings">
+                <div className="rdf-subfields-title">
+                  <span>Import class fields for {row.label || row.name}</span>
+                </div>
+                <div className="rdf-link-grid">
+                  <div className="rdf-link-control">
+                    <HelpHeader help={columnHelp.linkedClass}>Class</HelpHeader>
+                    <select value={row.targetEntityType || ''} onChange={(e) => updateRow(index, 'targetEntityType', e.target.value)}>
+                      <option value="">-- select --</option>
+                      {linkableEntityTypes.map(entityType => (
+                        <option key={entityType} value={entityType}>{entityType}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="rdf-link-control">
+                    <HelpHeader help={columnHelp.linkedClass}>Class value</HelpHeader>
+                    <input value={structure?.classes?.[row.targetEntityType] || ''} readOnly />
+                  </div>
+                </div>
+                {(() => {
+                  const importableFields = importableFieldEntriesForEntity(structure, row.targetEntityType);
+                  const selectedFields = new Set(row.importedFields || importableFields.map(field => field.key));
+                  return (
+                    <div className="rdf-import-field-list">
+                      {importableFields.map(field => (
+                        <label key={field.key} className="rdf-import-field-option">
+                          <input
+                            type="checkbox"
+                            checked={selectedFields.has(field.key)}
+                            onChange={(e) => {
+                              const nextFields = e.target.checked
+                                ? [...selectedFields, field.key]
+                                : [...selectedFields].filter(key => key !== field.key);
+                              updateRow(index, 'importedFields', nextFields);
+                            }}
+                          />
+                          <span>{field.label}</span>
+                          <code>{field.field?.predicate}</code>
+                        </label>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
             {row.kind === 'group' && (
               <div className="rdf-subfields">
-                <div className="rdf-nested-link-settings">
+                {showLinkToClassControls && <div className="rdf-nested-link-settings">
                   <div className="rdf-subfields-title">
                     <label className="rdf-link-toggle">
                       <input
@@ -1578,7 +2099,7 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
                       </div>
                     </div>
                   )}
-                </div>
+                </div>}
                 <div className="rdf-subfields-title">
                   <span>Subfields for {row.label || row.name}</span>
                   <button
@@ -1640,7 +2161,7 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
                           <input value={option.value || ''} onChange={(e) => updateOption(index, optionIndex, 'value', e.target.value)} />
                           <button type="button" className="delete-btn" onClick={() => removeOption(index, optionIndex)}>Remove</button>
                         </div>
-                        {linkedSettingsFor(
+                        {showLinkToClassControls && linkedSettingsFor(
                           option,
                           (key, value) => updateOption(index, optionIndex, key, value),
                           `Link ${option.label || option.name} option to a class`
@@ -1790,6 +2311,7 @@ function ClassPropertiesPane({ structure, selectedEntityType, entityTypes, onCha
 }
 
 function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, activeOrganisationIsUnscoped }) {
+  const { user } = useAuth();
   const { data, loading, error, refetch } = useQuery(GET_RDF_STRUCTURE, {
     variables: { organisationId: activeOrganisationId },
     skip: !activeOrganisationId && !activeOrganisationIsUnscoped,
@@ -1801,6 +2323,9 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
     refetchQueries: [{ query: GET_RDF_STRUCTURE, variables: { organisationId: activeOrganisationId } }],
   });
   const [loadPreset, { loading: loadingPreset }] = useMutation(LOAD_RDF_STRUCTURE_PRESET, {
+    refetchQueries: [{ query: GET_RDF_STRUCTURE, variables: { organisationId: activeOrganisationId } }],
+  });
+  const [deletePreset, { loading: deletingPreset }] = useMutation(DELETE_RDF_STRUCTURE_PRESET, {
     refetchQueries: [{ query: GET_RDF_STRUCTURE, variables: { organisationId: activeOrganisationId } }],
   });
   const fileInputRef = useRef(null);
@@ -1836,7 +2361,10 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
     : entityTypes[0] || '';
   const selectedRows = rowsByEntity[activeEntityType] || [];
   const presets = data?.rdfStructurePresets || [];
+  const globalPresets = presets.filter(preset => preset.scope === 'global');
+  const organisationPresets = presets.filter(preset => preset.scope !== 'global');
   const canWriteStructure = !!activeOrganisationCanWrite;
+  const canManageGlobalPresets = user?.role === 'admin';
 
   const setEntityRows = (entityType, rows) => {
     if (!canWriteStructure) return;
@@ -1862,7 +2390,7 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
         },
       },
     };
-    setRawJson(JSON.stringify(nextStructure, null, 2));
+    setRawJson(JSON.stringify(refreshImportedClassFieldsInStructure(nextStructure), null, 2));
   };
 
   const entityWithTemplateId = (entityType, entity, template, idPredicateEntityType = entityType) => {
@@ -1924,7 +2452,7 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
         return next;
       });
     }
-    setRawJson(JSON.stringify(nextStructure, null, 2));
+    setRawJson(JSON.stringify(refreshImportedClassFieldsInStructure(nextStructure), null, 2));
   };
 
   const addClass = () => {
@@ -1950,7 +2478,7 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
     setEditableClassNames(current => [...current, name]);
     setEditableFieldNames(current => ({ ...current, [name]: [] }));
     setSelectedEntityType(name);
-    setRawJson(JSON.stringify(nextStructure, null, 2));
+    setRawJson(JSON.stringify(refreshImportedClassFieldsInStructure(nextStructure), null, 2));
   };
 
   const deleteClass = (entityType) => {
@@ -1973,16 +2501,16 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
     ));
     setEditableClassNames(current => current.filter(name => name !== entityType));
     setEditableFieldNames(current => omitKeys(current, [entityType]));
-    setRawJson(JSON.stringify(nextStructure, null, 2));
+    setRawJson(JSON.stringify(refreshImportedClassFieldsInStructure(nextStructure), null, 2));
   };
 
   const setClassProperties = (nextStructure) => {
     if (!canWriteStructure) return;
-    setRawJson(JSON.stringify(nextStructure, null, 2));
+    setRawJson(JSON.stringify(refreshImportedClassFieldsInStructure(nextStructure), null, 2));
   };
 
   const buildStructure = () => {
-    return applyDefaultDatatypesToStructure(JSON.parse(sourceJson));
+    return refreshImportedClassFieldsInStructure(applyDefaultDatatypesToStructure(JSON.parse(sourceJson)));
   };
 
   const handleSave = async () => {
@@ -2001,8 +2529,8 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
     }
   };
 
-  const handleSavePreset = async () => {
-    if (!canWriteStructure) return;
+  const handleSavePreset = async (scope = 'organisation') => {
+    if (scope === 'global' ? !canManageGlobalPresets : !canWriteStructure) return;
     const name = window.prompt('Preset name');
     if (!name) return;
     try {
@@ -2013,9 +2541,10 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
           name,
           json: JSON.stringify(nextStructure, null, 2),
           organisationId: activeOrganisationId,
+          scope,
         },
       });
-      setMessage('RDF preset saved.');
+      setMessage(scope === 'global' ? 'Global RDF preset saved.' : 'RDF preset saved.');
     } catch (err) {
       setMessage(`Error: ${err.message}`);
     }
@@ -2027,7 +2556,7 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
     if (!confirmed) return;
     try {
       setMessage('');
-      await loadPreset({ variables: { id: preset.id, organisationId: activeOrganisationId } });
+      await loadPreset({ variables: { id: preset.id, organisationId: activeOrganisationId, scope: preset.scope } });
       await refetch({ organisationId: activeOrganisationId });
       setRawJson('');
       setEditableFieldNames({});
@@ -2046,6 +2575,19 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
 
   const handleDownloadPreset = (preset) => {
     downloadJsonFile(`${safeFilename(preset.name, 'rdf-preset')}.json`, preset.json);
+  };
+
+  const handleDeletePreset = async (preset) => {
+    if (!preset.canDelete) return;
+    const confirmed = window.confirm(`Delete "${preset.name}"?\n\nThis cannot be undone.`);
+    if (!confirmed) return;
+    try {
+      setMessage('');
+      await deletePreset({ variables: { id: preset.id, organisationId: activeOrganisationId, scope: preset.scope } });
+      setMessage(preset.scope === 'global' ? 'Global RDF preset deleted.' : 'RDF preset deleted.');
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    }
   };
 
   const importStructureJson = async (json) => {
@@ -2086,6 +2628,43 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const renderPresetList = (presetList, emptyMessage) => (
+    presetList.length === 0 ? (
+      <p>{emptyMessage}</p>
+    ) : (
+      <div className="rdf-preset-list">
+        {presetList.map(preset => (
+          <div className="rdf-preset-row" key={`${preset.scope}-${preset.id}`}>
+            <div>
+              <strong>{preset.name}</strong>
+              <span>Updated {new Date(preset.updatedAt).toLocaleString()}</span>
+            </div>
+            <div className="rdf-preset-actions">
+              <button type="button" onClick={() => handleDownloadPreset(preset)}>
+                Download
+              </button>
+              {canWriteStructure && (
+                <button type="button" onClick={() => handleLoadPreset(preset)} disabled={loadingPreset}>
+                  Load
+                </button>
+              )}
+              {preset.canDelete && (
+                <button
+                  type="button"
+                  className="delete-btn"
+                  onClick={() => handleDeletePreset(preset)}
+                  disabled={deletingPreset}
+                >
+                  Delete
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    )
+  );
+
   if (loading) return <p>Loading RDF structure...</p>;
   if (error) return <div className="error-message">{error.message}</div>;
 
@@ -2117,9 +2696,19 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
             <h3>Presets</h3>
             {canWriteStructure && (
               <div className="rdf-preset-heading-actions">
-                <button type="button" onClick={handleSavePreset} className="create-report-button" disabled={!!parseError || savingPreset}>
+                <button type="button" onClick={() => handleSavePreset()} className="create-report-button" disabled={!!parseError || savingPreset}>
                   {savingPreset ? 'Saving Preset...' : 'Save as Preset'}
                 </button>
+                {canManageGlobalPresets && (
+                  <button
+                    type="button"
+                    onClick={() => handleSavePreset('global')}
+                    className="create-report-button"
+                    disabled={!!parseError || savingPreset}
+                  >
+                    Save as Global Preset
+                  </button>
+                )}
                 <button type="button" onClick={() => fileInputRef.current?.click()} className="create-report-button">
                   Import File
                 </button>
@@ -2133,30 +2722,16 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
               </div>
             )}
           </div>
-          {presets.length === 0 ? (
-            <p>No presets saved yet.</p>
-          ) : (
-            <div className="rdf-preset-list">
-              {presets.map(preset => (
-                <div className="rdf-preset-row" key={preset.id}>
-                  <div>
-                    <strong>{preset.name}</strong>
-                    <span>Updated {new Date(preset.updatedAt).toLocaleString()}</span>
-                  </div>
-                  <div className="rdf-preset-actions">
-                    <button type="button" onClick={() => handleDownloadPreset(preset)}>
-                      Download
-                    </button>
-                    {canWriteStructure && (
-                      <button type="button" onClick={() => handleLoadPreset(preset)} disabled={loadingPreset}>
-                        Load
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <div className="rdf-preset-groups">
+            <section className="rdf-preset-group" aria-label="Global RDF structure presets">
+              <h4>Global presets</h4>
+              {renderPresetList(globalPresets, 'No global presets saved yet.')}
+            </section>
+            <section className="rdf-preset-group" aria-label="Organisation RDF structure presets">
+              <h4>Organisation presets</h4>
+              {renderPresetList(organisationPresets, 'No organisation presets saved yet.')}
+            </section>
+          </div>
         </section>
 
         {structure ? (

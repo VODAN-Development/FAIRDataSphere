@@ -60,6 +60,7 @@ const GET_REPORT_ITEMS = gql`
   query GetReportItems($organisationId: ID) {
     reportItems(organisationId: $organisationId) {
       entryNumber
+      uri
       reportId
       reportTitle
       reportNumber
@@ -456,6 +457,11 @@ export default function Items() {
                         </form>
                       ) : (
                         <div className="event-data-details">
+                          {item.uri && (
+                            <div className="event-detail-row">
+                              <strong>URI:</strong> {item.uri}
+                            </div>
+                          )}
                           {item.fieldValues.map(field => {
                             const value = displayValue(field);
                             if (!value) return null;

@@ -66,6 +66,8 @@ export default `#graphql
     id: ID!
     name: String!
     json: String!
+    scope: String!
+    canDelete: Boolean!
     createdBy: ID
     createdAt: String!
     updatedAt: String!
@@ -92,6 +94,7 @@ export default `#graphql
 
   type ReportItem {
     entryNumber: ID!
+    uri: String!
     reportId: Int
     reportTitle: String
     reportNumber: String
@@ -202,8 +205,9 @@ export default `#graphql
     deleteOrganisation(id: ID!): Boolean!
 
     updateRdfStructure(json: String!, organisationId: ID): RdfStructure!
-    saveRdfStructurePreset(name: String!, json: String!, organisationId: ID): RdfStructurePreset!
-    loadRdfStructurePreset(id: ID!, organisationId: ID): RdfStructure!
+    saveRdfStructurePreset(name: String!, json: String!, organisationId: ID, scope: String): RdfStructurePreset!
+    loadRdfStructurePreset(id: ID!, organisationId: ID, scope: String): RdfStructure!
+    deleteRdfStructurePreset(id: ID!, organisationId: ID, scope: String): Boolean!
 
     createReportItemFromFields(fieldValues: [RdfFieldValueInput!]!, organisationId: ID): ReportItem!
     updateReportItemFromFields(id: ID!, fieldValues: [RdfFieldValueInput!]!, organisationId: ID): ReportItem
