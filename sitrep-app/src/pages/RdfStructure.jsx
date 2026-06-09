@@ -218,16 +218,13 @@ function uniqueName(baseName, existingNames) {
 
 function rowsFromFields(fields, editableFieldNames = []) {
   const editableNames = new Set(editableFieldNames);
-  return Object.entries(fields || {}).map(([name, field]) => ({
-    name,
-    kind: fieldKind(field),
-    ...field,
-    isNew: editableNames.has(name),
-  }));
+  return Object.entries(fields || {})
+    .map(([name, field]) => rowFromStructureField(name, field, { isNew: editableNames.has(name) }));
 }
 
 function fieldKind(field = {}) {
-  if (isGroupField(field)) return field.inputType === 'import-class' ? 'importClass' : 'group';
+  if (field.inputType === 'import-class') return 'importClass';
+  if (isGroupField(field)) return 'group';
   if (field.options) return 'conditional';
   if (field.allowMultiple || field.inputType === 'text-list' || field.inputType === 'uri-list') return 'array';
   return 'scalar';
@@ -250,6 +247,44 @@ function isLinkedGroup(group = {}) {
   return !!(group.targetEntityType || group.targetLabelField || group.className);
 }
 
+function rowFromStructureField(name, field = {}, extra = {}) {
+  const kind = fieldKind(field);
+  if (kind === 'group' || kind === 'importClass') {
+    const groupProps = Object.fromEntries(
+      Object.entries(field || {}).filter(([key, value]) => groupPropertyNames.has(key) && value !== undefined)
+    );
+    return {
+      name,
+      kind,
+      inputType: kind === 'importClass' ? 'import-class' : (field?.inputType || 'location'),
+      predicate: field?.predicate || `sitrep:${name}`,
+      ...groupProps,
+      targetLabelField: field?.targetLabelField || groupProps.targetLabelField,
+      resourceMode: 'per-instance',
+      subfields: groupSubfieldEntries(field)
+        .map(([subfieldName, subfield]) => rowFromStructureField(subfieldName, subfield)),
+      ...extra,
+    };
+  }
+
+  return withDefaultDatatype({
+    name,
+    kind,
+    ...field,
+    options: field.options
+      ? Object.entries(field.options).map(([optionName, option]) => ({
+          ...option,
+          name: optionName,
+          label: option.label || optionName,
+          value: option.value || classForOption(optionName),
+          subfields: Object.entries(option.fields || {})
+            .map(([subfieldName, subfield]) => rowFromStructureField(subfieldName, subfield)),
+        }))
+      : undefined,
+    ...extra,
+  });
+}
+
 function combinedRowsFromEntity(entity, editableFieldNames = []) {
   const editableNames = new Set(editableFieldNames);
   const fields = {
@@ -259,43 +294,7 @@ function combinedRowsFromEntity(entity, editableFieldNames = []) {
   };
   const rows = Object.entries(fields)
     .filter(([, field]) => !field.generated && !field.metadataOnly)
-    .map(([name, field]) => {
-      const kind = fieldKind(field);
-      if (kind === 'group') {
-        const group = field;
-        const groupProps = Object.fromEntries(
-          Object.entries(group || {}).filter(([key, value]) => groupPropertyNames.has(key) && value !== undefined)
-        );
-        return {
-          name,
-          kind,
-          inputType: group?.inputType || 'location',
-          predicate: group?.predicate || `sitrep:${name}`,
-          ...groupProps,
-          targetLabelField: group?.targetLabelField || groupProps.targetLabelField,
-          resourceMode: 'per-instance',
-          subfields: groupSubfieldEntries(group)
-            .map(([subfieldName, subfield]) => withDefaultDatatype({ name: subfieldName, kind: fieldKind(subfield), ...subfield })),
-          isNew: editableNames.has(name),
-        };
-      }
-      return withDefaultDatatype({
-        name,
-        kind,
-        ...field,
-        options: field.options
-          ? Object.entries(field.options).map(([optionName, option]) => ({
-              ...option,
-              name: optionName,
-              label: option.label || optionName,
-              value: option.value || classForOption(optionName),
-              subfields: Object.entries(option.fields || {})
-                .map(([subfieldName, subfield]) => withDefaultDatatype({ name: subfieldName, kind: fieldKind(subfield), ...subfield })),
-            }))
-          : undefined,
-        isNew: editableNames.has(name),
-      });
-    });
+    .map(([name, field]) => rowFromStructureField(name, field, { isNew: editableNames.has(name) }));
 
   return rows;
 }
@@ -624,6 +623,7 @@ function importClassRowDefaults(structure, row, targetEntityType = row.targetEnt
     subfields: selectedEntries.map(importedSubfieldFromEntry),
   };
   delete nextRow.targetLabelField;
+  delete nextRow.allowMultiple;
   return nextRow;
 }
 

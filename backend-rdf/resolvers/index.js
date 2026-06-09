@@ -130,6 +130,8 @@ function normalizeCompiledReportConfig(config = {}) {
 function compiledReportPayload(report) {
   return {
     ...report,
+    bodyMarkdown: report.bodyMarkdown || "",
+    bodyHtml: report.bodyHtml || "",
     selectedItemIds: (report.selectedItemIds || []).map(id => parseInt(id, 10)).filter(Number.isFinite),
     itemFieldNames: Array.isArray(report.itemFieldNames) ? report.itemFieldNames : [],
   };
@@ -464,6 +466,109 @@ async function setItemReportMetadata(itemId, report) {
   `);
 }
 
+function valueFromTerm(term = {}) {
+  return term.value;
+}
+
+async function loadFieldValueForSubject(subject, legacySubject, fieldName, field) {
+  const variable = sparqlVariableName(fieldName, field);
+  const result = await runSparqlQuery(`${PREFIXES}
+    SELECT ?${variable} WHERE {
+      ${field.predicate ? `OPTIONAL { ${subject} ${field.predicate} ?${variable}Grouped . }` : ""}
+      ${legacySubject && field.predicate ? `OPTIONAL { ${legacySubject} ${field.predicate} ?${variable}Legacy . }` : ""}
+      ${legacySubject ? `BIND(COALESCE(?${variable}Grouped, ?${variable}Legacy) AS ?${variable})` : `BIND(?${variable}Grouped AS ?${variable})`}
+    }
+  `);
+  const values = result.results.bindings
+    .map(binding => valueFromTerm(binding[variable]))
+    .filter(Boolean);
+  if (isArrayField(field)) return values;
+  return values[0];
+}
+
+async function loadConditionalFieldForSubject(subject, legacySubject, fieldName, field) {
+  const storedValue = await loadFieldValueForSubject(subject, legacySubject, fieldName, field);
+  if (!storedValue) return null;
+  const selectedOption = optionKeyFromStoredValue(field, storedValue);
+  const option = field.options?.[selectedOption];
+  return {
+    selectedOption,
+    values: option ? await loadFieldsForSubject(subject, option.fields || {}, legacySubject) : {},
+  };
+}
+
+async function loadGroupSubjects(parentSubject, groupName, group) {
+  if (!group.predicate) return [nestedGroupUri(parentSubject, groupName)];
+  const result = await runSparqlQuery(`${PREFIXES}
+    SELECT ?groupSubject WHERE {
+      ${parentSubject} ${group.predicate} ?groupSubject .
+    }
+  `);
+  const subjects = result.results.bindings
+    .map(binding => binding.groupSubject?.value)
+    .filter(Boolean)
+    .map(value => termToIri(value));
+  return subjects.length > 0 ? subjects : [nestedGroupUri(parentSubject, groupName)];
+}
+
+async function loadLinkedGroupId(group, groupSubject) {
+  if (!group.targetEntityType) return undefined;
+  const idFieldName = entityIdField(group.targetEntityType);
+  const idField = RDF[group.targetEntityType]?.fields?.[idFieldName];
+  if (idField?.predicate) {
+    const result = await runSparqlQuery(`${PREFIXES}
+      SELECT ?id WHERE {
+        ${groupSubject} ${idField.predicate} ?id .
+      }
+      LIMIT 1
+    `);
+    const idValue = result.results.bindings[0]?.id?.value;
+    if (idValue !== undefined) return idValue;
+  }
+  try {
+    return entityIdFromUri(group.targetEntityType, String(groupSubject).replace(/^<|>$/g, ""));
+  } catch {
+    return undefined;
+  }
+}
+
+async function loadGroupValueForSubject(parentSubject, groupName, group) {
+  const groupSubjects = await loadGroupSubjects(parentSubject, groupName, group);
+  const groupValues = [];
+  const groupFields = Object.fromEntries(groupSubfieldEntries(group));
+
+  for (const groupSubject of groupSubjects) {
+    const groupData = await loadFieldsForSubject(groupSubject, groupFields, parentSubject);
+    const id = await loadLinkedGroupId(group, groupSubject);
+    if (id !== undefined) groupData.id = id;
+    if (fieldHasInputValue(groupData)) groupValues.push(groupData);
+  }
+
+  return group.allowMultiple ? groupValues : (groupValues[0] || null);
+}
+
+async function loadFieldsForSubject(subject, fields = {}, legacySubject = null) {
+  const data = {};
+  for (const [fieldName, field] of Object.entries(fields || {})) {
+    if (!field || typeof field !== "object" || !field.predicate) continue;
+    if (isGroupField(field)) {
+      const groupValue = await loadGroupValueForSubject(subject, fieldName, field);
+      if (groupValue !== null && groupValue !== undefined) data[fieldName] = groupValue;
+      continue;
+    }
+    if (field.options) {
+      const conditionalValue = await loadConditionalFieldForSubject(subject, legacySubject, fieldName, field);
+      if (conditionalValue) data[fieldName] = conditionalValue;
+      continue;
+    }
+    const value = await loadFieldValueForSubject(subject, legacySubject, fieldName, field);
+    if (value !== undefined && value !== null && (!Array.isArray(value) || value.length > 0)) {
+      data[fieldName] = value;
+    }
+  }
+  return data;
+}
+
 async function loadReportItemCollections(item) {
   const subject = entityUri("reportItem", item.entryNumber);
 
@@ -479,36 +584,7 @@ async function loadReportItemCollections(item) {
   }
 
   for (const [groupName, group] of Object.entries(RDF.reportItem.fields || {}).filter(([, field]) => isGroupField(field))) {
-    const subfields = groupSubfieldEntries(group);
-    if (subfields.length === 0) continue;
-
-    const variables = subfields.map(([fieldName, field]) => sparqlVariableName(fieldName, field));
-    const groupSubjectVariable = `${sparqlVariableName(groupName, group)}Subject`;
-    const perInstanceGroupSubject = nestedGroupUri(subject, groupName);
-    const locResult = await runSparqlQuery(`${PREFIXES}
-      SELECT ${variables.map(variable => `?${variable}`).join(" ")} WHERE {
-        ${group.predicate ? `OPTIONAL { ${subject} ${group.predicate} ?${groupSubjectVariable}Linked . }` : ""}
-        BIND(COALESCE(?${groupSubjectVariable}Linked, ${perInstanceGroupSubject}) AS ?${groupSubjectVariable})
-        ${subfields.map(([fieldName, field]) => {
-          const variable = sparqlVariableName(fieldName, field);
-          return `
-            ${group.predicate ? `OPTIONAL { ?${groupSubjectVariable} ${field.predicate} ?${variable}Grouped . }` : ""}
-            OPTIONAL { ${subject} ${field.predicate} ?${variable}Legacy . }
-            BIND(COALESCE(?${variable}Grouped, ?${variable}Legacy) AS ?${variable})
-          `;
-        }).join("\n")}
-      }
-    `);
-
-    if (locResult.results.bindings.length > 0) {
-      const binding = locResult.results.bindings[0];
-      item[groupName] = Object.fromEntries(
-        subfields.map(([fieldName, field]) => {
-          const variable = sparqlVariableName(fieldName, field);
-          return [fieldName, binding[variable]?.value];
-        })
-      );
-    }
+    item[groupName] = await loadGroupValueForSubject(subject, groupName, group);
   }
 
   for (const [fieldName, field] of Object.entries(RDF.reportItem.fields || {})) {
@@ -834,7 +910,7 @@ async function updateActiveRdfStructure(organisationId, json) {
 function parseFieldValue(field, value) {
   if (value === null || value === undefined) return value;
   if (field.kind === "array") return JSON.parse(value);
-  if (field.kind === "group" || field.kind === "location") return JSON.parse(value);
+  if (field.kind === "group" || field.kind === "location" || field.kind === "importClass") return JSON.parse(value);
   if (field.kind === "conditional") return JSON.parse(value);
   if (field.datatype === "xsd:integer") return parseInt(value, 10);
   return value;
@@ -920,7 +996,7 @@ function valueForFieldPayload(field, value) {
       : (value ? [decryptDataForField(field, value)] : []);
     return values.length > 0 ? JSON.stringify(values) : null;
   }
-  if (field.kind === "group" || field.kind === "location" || field.kind === "conditional") {
+  if (field.kind === "group" || field.kind === "location" || field.kind === "importClass" || field.kind === "conditional") {
     return value ? JSON.stringify(value) : null;
   }
   return decryptDataForField(field, value) ?? null;
@@ -2030,6 +2106,7 @@ const resolvers = {
         title: input.title,
         subtitle: input.subtitle || "",
         executiveSummary: input.executiveSummary || "",
+        bodyMarkdown: input.bodyMarkdown || "",
         bodyHtml: input.bodyHtml,
         selectedItemIds: input.selectedItemIds || [],
         itemFieldNames: input.itemFieldNames || [],

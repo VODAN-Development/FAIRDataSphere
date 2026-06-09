@@ -288,6 +288,9 @@ function labelFieldForEntityInStructure(structure, entityType) {
 function normalizeCreateEntityTemplatesForFields(structure, fields) {
   Object.values(fields || {}).forEach(field => {
     if (!field || typeof field !== "object") return;
+    if (field.inputType === "import-class") {
+      delete field.allowMultiple;
+    }
     if (field.targetEntityType) {
       field.targetClass = field.targetClass || structure.classes?.[field.targetEntityType];
       field.targetTemplate = field.targetTemplate || structure.uriTemplates?.[field.targetEntityType];
@@ -415,21 +418,39 @@ function classValueForOption(optionName) {
 
 export function editableFieldEntries(entityType) {
   const entity = RDF[entityType];
-  const fieldKind = field => isGroupField(field)
+  const fieldKind = field => field.inputType === "import-class"
+    ? "importClass"
+    : isGroupField(field)
     ? "group"
     : field.options
     ? "conditional"
     : isArrayField(field)
       ? "array"
       : "scalar";
-  const editableSubfield = (name, field) => ({
-    ...field,
-    name,
-    kind: fieldKind(field),
-    subfields: isGroupField(field)
-      ? groupSubfieldEntries(field).map(([subfieldName, subfield]) => editableSubfield(subfieldName, subfield))
-      : undefined,
-  });
+  function editableOption(optionName, option) {
+    return {
+      ...option,
+      name: optionName,
+      label: option.label || optionName,
+      value: option.value || classValueForOption(optionName),
+      subfields: Object.entries(option.fields || {})
+        .map(([subfieldName, subfield]) => editableSubfield(subfieldName, subfield)),
+    };
+  }
+
+  function editableSubfield(name, field) {
+    return {
+      ...field,
+      name,
+      kind: fieldKind(field),
+      options: field.options
+        ? Object.entries(field.options).map(([optionName, option]) => editableOption(optionName, option))
+        : undefined,
+      subfields: isGroupField(field)
+        ? groupSubfieldEntries(field).map(([subfieldName, subfield]) => editableSubfield(subfieldName, subfield))
+        : undefined,
+    };
+  }
   const scalarFields = Object.entries(entity.fields || {})
     .filter(([, field]) => !field.generated && !field.metadataOnly)
     .map(([name, field]) => ({
@@ -437,14 +458,7 @@ export function editableFieldEntries(entityType) {
       name,
       kind: fieldKind(field),
       options: field.options
-        ? Object.entries(field.options).map(([optionName, option]) => ({
-            ...option,
-            name: optionName,
-            label: option.label || optionName,
-            value: option.value || classValueForOption(optionName),
-            subfields: Object.entries(option.fields || {})
-              .map(([subfieldName, subfield]) => editableSubfield(subfieldName, subfield)),
-          }))
+        ? Object.entries(field.options).map(([optionName, option]) => editableOption(optionName, option))
         : undefined,
       subfields: isGroupField(field)
         ? groupSubfieldEntries(field).map(([subfieldName, subfield]) => editableSubfield(subfieldName, subfield))

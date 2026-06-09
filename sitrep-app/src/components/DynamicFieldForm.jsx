@@ -44,7 +44,7 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
     field.allowMultiple || field.inputType === 'uri-list' || field.inputType === 'text-list'
   );
 
-  const isGroupField = (field) => field.kind === 'group' || field.kind === 'location';
+  const isGroupField = (field) => field.kind === 'group' || field.kind === 'location' || field.kind === 'importClass';
 
   const emptyGroupValue = (field) => Object.fromEntries((field.subfields || []).map(subfield => [
     subfield.name,
@@ -562,7 +562,7 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
                 + Add {field.label || field.name}
               </button>
             </>
-          ) : field.kind === 'group' || field.kind === 'location' ? (
+          ) : field.kind === 'group' || field.kind === 'location' || field.kind === 'importClass' ? (
             <div className={field.inputType === 'import-class' ? 'imported-class-input' : 'coordinates'}>
               {field.inputType === 'import-class' && (
                 <div className="imported-class-heading">

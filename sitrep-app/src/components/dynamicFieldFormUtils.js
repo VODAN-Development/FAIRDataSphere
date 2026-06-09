@@ -1,5 +1,5 @@
 function isGroupField(field) {
-  return field.kind === 'group' || field.kind === 'location';
+  return field.kind === 'group' || field.kind === 'location' || field.kind === 'importClass';
 }
 
 function isListField(field) {
@@ -77,7 +77,7 @@ export function emptyValueFor(field) {
 
 export function parseValueForEdit(field) {
   if (!field.value) return emptyValueFor(field);
-  if (field.kind === 'array' || field.kind === 'group' || field.kind === 'location' || field.kind === 'conditional') {
+  if (field.kind === 'array' || field.kind === 'group' || field.kind === 'location' || field.kind === 'importClass' || field.kind === 'conditional') {
     try {
       const value = JSON.parse(field.value);
       if (field.kind === 'array') return Array.isArray(value) && value.length ? value : [''];

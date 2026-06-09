@@ -7,68 +7,53 @@ import { useOrganisationContext } from '../auth/useOrganisationContext.js';
 import { notifyReportsUpdated, titleForEntity } from '../utils/reportDisplay.js';
 
 const GET_RDF_STRUCTURE = gql`
+  fragment RdfStructureFieldLevel3 on RdfStructureField {
+    name
+    label
+    inputType
+    kind
+    datatype
+    allowMultiple
+    encrypted
+  }
+
+  fragment RdfStructureFieldLevel2 on RdfStructureField {
+    ...RdfStructureFieldLevel3
+    subfields {
+      ...RdfStructureFieldLevel3
+    }
+    options {
+      name
+      label
+      subfields {
+        ...RdfStructureFieldLevel3
+      }
+    }
+  }
+
+  fragment RdfStructureFieldLevel1 on RdfStructureField {
+    ...RdfStructureFieldLevel3
+    required
+    subfields {
+      ...RdfStructureFieldLevel2
+    }
+    options {
+      name
+      label
+      subfields {
+        ...RdfStructureFieldLevel2
+      }
+    }
+  }
+
   query GetRdfStructure($organisationId: ID) {
     rdfStructure(organisationId: $organisationId) {
       json
       reportItemFields {
-        name
-        label
-        required
-        inputType
-        kind
-        datatype
-        allowMultiple
-        encrypted
-        subfields {
-          name
-          label
-          inputType
-          datatype
-          allowMultiple
-          encrypted
-        }
-        options {
-          name
-          label
-          subfields {
-            name
-            label
-            inputType
-            datatype
-            allowMultiple
-            encrypted
-          }
-        }
+        ...RdfStructureFieldLevel1
       }
       reportFields {
-        name
-        label
-        required
-        inputType
-        kind
-        datatype
-        allowMultiple
-        encrypted
-        subfields {
-          name
-          label
-          inputType
-          datatype
-          allowMultiple
-          encrypted
-        }
-        options {
-          name
-          label
-          subfields {
-            name
-            label
-            inputType
-            datatype
-            allowMultiple
-            encrypted
-          }
-        }
+        ...RdfStructureFieldLevel1
       }
     }
   }
@@ -96,6 +81,7 @@ function isGroupField(field = {}) {
 }
 
 function fieldKind(field = {}) {
+  if (field.inputType === 'import-class') return 'importClass';
   if (isGroupField(field)) return 'group';
   if (field.options) return 'conditional';
   if (field.allowMultiple || field.inputType === 'text-list' || field.inputType === 'uri-list') return 'array';

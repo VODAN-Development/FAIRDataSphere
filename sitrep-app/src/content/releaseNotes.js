@@ -7,7 +7,7 @@ export const RELEASE_NOTE_TEMPLATE = {
   sections: [
     {
       title: 'New',
-      items: ['Feature added in this release.'],
+      items: ['Users can customise, compile, edit, and download reports.'],
     },
     {
       title: 'Improved',
@@ -15,12 +15,34 @@ export const RELEASE_NOTE_TEMPLATE = {
     },
     {
       title: 'Fixed',
-      items: ['Issue fixed in this release.'],
+      items: ['Minor bugs fixed related to update.'],
     },
   ],
 };
 
 export const RELEASE_NOTES = [
+  {
+    version: 'v0.0.3',
+    date: '09-06-2026',
+    title: 'Multiple updates',
+    summary: 'Improved rdf structure configuration and added report functionalities.',
+    sections: [
+      {
+        title: 'New',
+        items: ['Users can customise, compile, edit, and download reports.'],
+        items: ['Users can create, load, import and delete presets.'],
+        items: ['Global presets are available to all organisations.'],
+      },
+      {
+        title: 'Improved',
+        items: ['Classes can be imported into other classes rather than linking manually.'],
+      },
+      {
+        title: 'Fixed',
+        items: ['Issue fixed in this release.'],
+      },
+    ],
+  },
   {
     version: 'v0.0.2',
     date: '23-05-2026',

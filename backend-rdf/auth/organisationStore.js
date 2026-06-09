@@ -662,7 +662,7 @@ export async function saveOrganisationRdfStructurePreset(organisationId, { name,
   await mkdir(rdfStructureDirectoryPath(organisationId), { recursive: true });
   await writeFile(rdfPresetFilePath(organisationId, id), normalizedJson, "utf8");
   await writeRdfPresetMetadata(organisationId, [...presets, preset]);
-  return { ...preset, json: normalizedJson };
+  return rdfPresetPayload(organisationId, preset);
 }
 
 export async function rdfStructurePresetJson(organisationId, presetId) {

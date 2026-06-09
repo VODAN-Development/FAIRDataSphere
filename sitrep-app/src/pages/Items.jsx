@@ -14,7 +14,56 @@ const GET_RDF_STRUCTURE = gql`
   }
 `;
 
+const RDF_FIELD_VALUE_FIELDS = gql`
+  fragment RdfFieldValueLevel3 on RdfStructureField {
+    name
+    label
+    inputType
+    kind
+    datatype
+    allowMultiple
+    encrypted
+  }
+
+  fragment RdfFieldValueLevel2 on RdfStructureField {
+    ...RdfFieldValueLevel3
+    subfields {
+      ...RdfFieldValueLevel3
+    }
+    options {
+      name
+      label
+      subfields {
+        ...RdfFieldValueLevel3
+      }
+    }
+  }
+
+  fragment RdfFieldValueFields on RdfFieldValue {
+    name
+    label
+    value
+    kind
+    datatype
+    required
+    inputType
+    allowMultiple
+    encrypted
+    subfields {
+      ...RdfFieldValueLevel2
+    }
+    options {
+      name
+      label
+      subfields {
+        ...RdfFieldValueLevel2
+      }
+    }
+  }
+`;
+
 const GET_RDF_ENTITIES = gql`
+  ${RDF_FIELD_VALUE_FIELDS}
   query GetRdfEntities($entityType: String!, $organisationId: ID) {
     rdfEntities(entityType: $entityType, organisationId: $organisationId) {
       entityType
@@ -22,41 +71,14 @@ const GET_RDF_ENTITIES = gql`
       uri
       className
       fieldValues {
-        name
-        label
-        value
-        kind
-        datatype
-        required
-        inputType
-        allowMultiple
-        encrypted
-        subfields {
-          name
-          label
-          inputType
-          datatype
-          allowMultiple
-          encrypted
-        }
-        options {
-          name
-          label
-          subfields {
-            name
-            label
-            inputType
-            datatype
-            allowMultiple
-            encrypted
-          }
-        }
+        ...RdfFieldValueFields
       }
     }
   }
 `;
 
 const GET_REPORT_ITEMS = gql`
+  ${RDF_FIELD_VALUE_FIELDS}
   query GetReportItems($organisationId: ID) {
     reportItems(organisationId: $organisationId) {
       entryNumber
@@ -68,35 +90,7 @@ const GET_REPORT_ITEMS = gql`
       createdAt
       updatedAt
       fieldValues {
-        name
-        label
-        value
-        kind
-        datatype
-        required
-        inputType
-        allowMultiple
-        encrypted
-        subfields {
-          name
-          label
-          inputType
-          datatype
-          allowMultiple
-          encrypted
-        }
-        options {
-          name
-          label
-          subfields {
-            name
-            label
-            inputType
-            datatype
-            allowMultiple
-            encrypted
-          }
-        }
+        ...RdfFieldValueFields
       }
     }
   }

@@ -7,37 +7,97 @@ import OrganisationGate from '../components/OrganisationGate.jsx';
 import { useOrganisationContext } from '../auth/useOrganisationContext.js';
 
 const GET_RDF_STRUCTURE = gql`
+  fragment ReportRdfStructureFieldLevel3 on RdfStructureField {
+    name
+    label
+    inputType
+    kind
+    datatype
+    allowMultiple
+    encrypted
+  }
+
+  fragment ReportRdfStructureFieldLevel2 on RdfStructureField {
+    ...ReportRdfStructureFieldLevel3
+    subfields {
+      ...ReportRdfStructureFieldLevel3
+    }
+    options {
+      name
+      label
+      subfields {
+        ...ReportRdfStructureFieldLevel3
+      }
+    }
+  }
+
+  fragment ReportRdfStructureFieldFields on RdfStructureField {
+    ...ReportRdfStructureFieldLevel3
+    required
+    subfields {
+      ...ReportRdfStructureFieldLevel2
+    }
+    options {
+      name
+      label
+      subfields {
+        ...ReportRdfStructureFieldLevel2
+      }
+    }
+  }
+
   query GetRdfStructureForReports($organisationId: ID) {
     rdfStructure(organisationId: $organisationId) {
       reportFields {
-        name
-        label
-        required
-        inputType
-        kind
-        datatype
-        allowMultiple
-        encrypted
-        subfields {
-          name
-          label
-          inputType
-          datatype
-          allowMultiple
-          encrypted
-        }
-        options {
-          name
-          label
-          subfields {
-            name
-            label
-            inputType
-            datatype
-            allowMultiple
-            encrypted
-          }
-        }
+        ...ReportRdfStructureFieldFields
+      }
+    }
+  }
+`;
+
+const REPORT_FIELD_VALUE_FIELDS = gql`
+  fragment ReportFieldValueLevel3 on RdfStructureField {
+    name
+    label
+    inputType
+    kind
+    datatype
+    allowMultiple
+    encrypted
+  }
+
+  fragment ReportFieldValueLevel2 on RdfStructureField {
+    ...ReportFieldValueLevel3
+    subfields {
+      ...ReportFieldValueLevel3
+    }
+    options {
+      name
+      label
+      subfields {
+        ...ReportFieldValueLevel3
+      }
+    }
+  }
+
+  fragment ReportFieldValueFields on RdfFieldValue {
+    name
+    label
+    value
+    kind
+    datatype
+    required
+    inputType
+    allowMultiple
+    encrypted
+    subfields {
+      ...ReportFieldValueLevel2
+    }
+    options {
+      name
+      label
+      subfields {
+        ...ReportFieldValueLevel2
       }
     }
   }
@@ -59,6 +119,7 @@ const GET_REPORT_ITEMS = gql`
 `;
 
 const GET_REPORTS = gql`
+  ${REPORT_FIELD_VALUE_FIELDS}
   query GetReports($organisationId: ID) {
     reports(organisationId: $organisationId) {
       id
@@ -66,35 +127,7 @@ const GET_REPORTS = gql`
       createdAt
       updatedAt
       fieldValues {
-        name
-        label
-        value
-        kind
-        datatype
-        required
-        inputType
-        allowMultiple
-        encrypted
-        subfields {
-          name
-          label
-          inputType
-          datatype
-          allowMultiple
-          encrypted
-        }
-        options {
-          name
-          label
-          subfields {
-            name
-            label
-            inputType
-            datatype
-            allowMultiple
-            encrypted
-          }
-        }
+        ...ReportFieldValueFields
       }
     }
   }
@@ -122,6 +155,7 @@ const GET_COMPILED_REPORTS = gql`
       title
       subtitle
       executiveSummary
+      bodyMarkdown
       bodyHtml
       selectedItemIds
       itemFieldNames
@@ -195,6 +229,7 @@ const UPDATE_COMPILED_REPORT = gql`
       title
       subtitle
       executiveSummary
+      bodyMarkdown
       bodyHtml
       selectedItemIds
       itemFieldNames
@@ -226,6 +261,58 @@ function textToHtml(value) {
   return escapeHtml(value).replace(/\n/g, '<br>');
 }
 
+function markdownInlineToHtml(value) {
+  return escapeHtml(value)
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+}
+
+function markdownToHtml(markdown) {
+  const blocks = String(markdown || '')
+    .replace(/\r\n/g, '\n')
+    .split(/\n{2,}/)
+    .map(block => block.trim())
+    .filter(Boolean);
+
+  return blocks.map(block => {
+    const lines = block.split('\n');
+    const firstLine = lines[0] || '';
+    if (/^###\s+/.test(firstLine)) {
+      return `<h3>${markdownInlineToHtml(firstLine.replace(/^###\s+/, ''))}</h3>`;
+    }
+    if (/^##\s+/.test(firstLine)) {
+      return `<h2>${markdownInlineToHtml(firstLine.replace(/^##\s+/, ''))}</h2>`;
+    }
+    if (/^#\s+/.test(firstLine)) {
+      return `<h1>${markdownInlineToHtml(firstLine.replace(/^#\s+/, ''))}</h1>`;
+    }
+    if (lines.every(line => /^-\s+/.test(line))) {
+      return `<ul>${lines.map(line => `<li>${markdownInlineToHtml(line.replace(/^-\s+/, ''))}</li>`).join('')}</ul>`;
+    }
+    return `<p>${lines.map(markdownInlineToHtml).join('<br>')}</p>`;
+  }).join('\n');
+}
+
+function htmlToPlainMarkdown(html) {
+  if (!html || typeof document === 'undefined') return '';
+  const container = document.createElement('div');
+  container.innerHTML = html;
+  const sections = Array.from(container.querySelectorAll('.compiled-item'));
+  if (sections.length) {
+    return sections.map(section => {
+      const heading = section.querySelector('h2')?.textContent?.trim();
+      const paragraphs = Array.from(section.querySelectorAll('p'))
+        .map(paragraph => paragraph.textContent.trim())
+        .filter(Boolean);
+      return [
+        heading ? `## ${heading}` : '',
+        ...paragraphs,
+      ].filter(Boolean).join('\n\n');
+    }).join('\n\n');
+  }
+  return container.textContent.trim();
+}
+
 function safeFilename(value, fallback = 'compiled-report') {
   return String(value || fallback)
     .trim()
@@ -241,31 +328,49 @@ function itemParagraph(item) {
   return displayValue(fieldValueByName(item.fieldValues, 'paragraph') || {}) || itemTitle(item);
 }
 
-function generatedBodyHtml({ report, items, config, selectedItemIds, itemFieldNames }) {
+function reportNumber(report) {
+  return displayValue(fieldValueByName(report?.fieldValues || [], 'reportNumber') || {}) || report?.id || '';
+}
+
+function reportTitleWithNumber(report) {
+  const title = reportTitle(report);
+  const number = reportNumber(report);
+  if (!number || title.includes(String(number))) return title;
+  return `${title} (No. ${number})`;
+}
+
+function generatedBodyMarkdown({ report, items, config, selectedItemIds, itemFieldNames }) {
   const orderedItems = selectedItemIds
     .map(itemId => items.find(item => Number(item.entryNumber) === Number(itemId)))
     .filter(Boolean);
   const includedNames = new Set(itemFieldNames || []);
   return orderedItems.map((item, index) => {
     const detailRows = item.fieldValues
-      .filter(field => field.value && (!includedNames.size || includedNames.has(field.name)))
+      .filter(field => field.value && includedNames.has(field.name))
       .filter(field => field.name !== 'paragraph' && field.name !== 'title')
       .map(field => {
         const value = displayValue(field);
         if (!value) return '';
         return config.includeFieldLabels
-          ? `<p class="compiled-field"><strong>${escapeHtml(field.label || field.name)}:</strong> ${textToHtml(value)}</p>`
-          : `<p class="compiled-field">${textToHtml(value)}</p>`;
+          ? `**${field.label || field.name}:** ${value}`
+          : value;
       })
-      .join('');
-    return `
-      <section class="compiled-item">
-        <h2>${index + 1}. ${escapeHtml(itemTitle(item))}</h2>
-        <p>${textToHtml(itemParagraph(item))}</p>
-        ${detailRows}
-      </section>
-    `;
-  }).join('\n') || `<p>${escapeHtml(`No report items selected for ${reportTitle(report)}.`)}</p>`;
+      .filter(Boolean);
+    return [
+      `## ${index + 1}. ${itemTitle(item)}`,
+      itemParagraph(item),
+      ...detailRows,
+    ].filter(Boolean).join('\n\n');
+  }).join('\n\n') || `No report items selected for ${reportTitle(report)}.`;
+}
+
+function compiledReportBodyHtml(compiledReport) {
+  if (compiledReport.bodyMarkdown) return markdownToHtml(compiledReport.bodyMarkdown);
+  return compiledReport.bodyHtml || '';
+}
+
+function compiledReportEditableMarkdown(compiledReport) {
+  return compiledReport.bodyMarkdown || htmlToPlainMarkdown(compiledReport.bodyHtml || '');
 }
 
 function compiledHtmlDocument(compiledReport, config) {
@@ -285,7 +390,9 @@ function compiledHtmlDocument(compiledReport, config) {
     .subtitle { color: #52606d; font: 600 14px Arial, sans-serif; margin: 0; }
     .summary { border-left: 4px solid ${accent}; margin: 24px 0; padding: 10px 0 10px 16px; }
     .compiled-item { border-top: 1px solid #d9e2ec; padding: 18px 0; }
-    .compiled-item h2 { color: ${accent}; font: 700 18px Arial, sans-serif; margin: 0 0 8px; }
+    .compiled-item h2, main h2 { border-top: 1px solid #d9e2ec; color: ${accent}; font: 700 18px Arial, sans-serif; margin: 18px 0 8px; padding-top: 18px; }
+    main h2:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
+    main p { margin: 8px 0; }
     .compiled-field { color: #334e68; font-size: 14px; margin: 6px 0; }
     footer { border-top: 1px solid #d9e2ec; color: #66788a; font: 12px Arial, sans-serif; margin-top: 30px; padding-top: 12px; }
     @media print { body { background: #fff; } .page { max-width: none; padding: 0; } }
@@ -299,7 +406,7 @@ function compiledHtmlDocument(compiledReport, config) {
       <p class="subtitle">${escapeHtml(compiledReport.subtitle || config.headerNote || '')}</p>
     </header>
     ${compiledReport.executiveSummary ? `<section class="summary">${textToHtml(compiledReport.executiveSummary)}</section>` : ''}
-    <main>${compiledReport.bodyHtml || ''}</main>
+    <main>${compiledReportBodyHtml(compiledReport)}</main>
     <footer>${escapeHtml(config.footerText || '')}</footer>
   </article>
 </body>
@@ -314,6 +421,27 @@ function downloadHtml(filename, html) {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function downloadText(filename, text, type = 'text/plain;charset=utf-8') {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function printHtmlDocument(html) {
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) return false;
+  printWindow.document.open();
+  printWindow.document.write(html);
+  printWindow.document.close();
+  printWindow.focus();
+  setTimeout(() => printWindow.print(), 250);
+  return true;
 }
 
 function compiledConfigInput(config, itemFieldNames = config.itemFieldNames || []) {
@@ -433,29 +561,41 @@ export default function Reports() {
   const reportItems = useMemo(() => itemsData?.reportItems || [], [itemsData]);
   const reports = useMemo(() => reportsData?.reports || [], [reportsData]);
   const compiledReports = useMemo(() => compiledReportsData?.compiledReports || [], [compiledReportsData]);
-  const compiledConfig = compiledConfigData?.compiledReportConfig || compiledConfigDraft || DEFAULT_COMPILED_CONFIG;
+  const compiledConfig = compiledConfigDraft || compiledConfigData?.compiledReportConfig || DEFAULT_COMPILED_CONFIG;
+  const selectedReport = !isCreatingReport
+    ? reports.find(report => String(report.id) === String(selectedReportId)) || reports[0] || null
+    : null;
+  const selectedReportItems = useMemo(() => {
+    const selectedIds = new Set((selectedReport?.selectedItemIds || []).map(Number));
+    return reportItems.filter(item => selectedIds.has(Number(item.entryNumber)));
+  }, [reportItems, selectedReport?.selectedItemIds]);
   const itemFieldOptions = useMemo(() => {
     const fieldsByName = new Map();
-    reportItems.forEach(item => item.fieldValues.forEach(field => {
+    selectedReportItems.forEach(item => item.fieldValues.forEach(field => {
       if (!field.name || fieldsByName.has(field.name)) return;
       fieldsByName.set(field.name, { name: field.name, label: field.label || field.name });
     }));
     return Array.from(fieldsByName.values());
-  }, [reportItems]);
+  }, [selectedReportItems]);
   const gqlError = structureError || itemsError || reportsError || compiledConfigError || compiledReportsError;
   const loading = structureLoading || itemsLoading || reportsLoading || compiledConfigLoading || compiledReportsLoading;
-  const selectedReport = !isCreatingReport
-    ? reports.find(report => String(report.id) === String(selectedReportId)) || reports[0] || null
-    : null;
-  const selectedCompiledReport = compiledReports.find(report => String(report.id) === String(selectedCompiledReportId))
-    || compiledReports.find(report => String(report.sourceReportId) === String(selectedReport?.id))
-    || compiledReports[0]
+  const compiledReportsForSelectedReport = useMemo(() => {
+    if (!selectedReport) return [];
+    return compiledReports.filter(report => String(report.sourceReportId) === String(selectedReport.id));
+  }, [compiledReports, selectedReport?.id]);
+  const selectedCompiledReport = compiledReportsForSelectedReport.find(report => String(report.id) === String(selectedCompiledReportId))
+    || compiledReportsForSelectedReport[0]
     || null;
 
   useEffect(() => {
     if (selectedReport?.selectedItemIds) {
       setCompileItemIds(new Set(selectedReport.selectedItemIds.map(Number)));
     }
+  }, [selectedReport?.id]);
+
+  useEffect(() => {
+    setSelectedCompiledReportId('');
+    setCompiledEditDraft(null);
   }, [selectedReport?.id]);
 
   const reportHasItem = (report, item) => {
@@ -561,18 +701,19 @@ export default function Reports() {
       setError('');
       const selectedItemIds = Array.from(compileItemIds);
       const itemFieldNames = Array.from(compileFieldNames);
-      const title = `${compiledConfig.reportSeriesTitle || 'Situation Report'} No. ${selectedReport.id}`;
-      const subtitle = reportTitle(selectedReport);
+      const title = `${compiledConfig.reportSeriesTitle || 'Situation Report'} No. ${reportNumber(selectedReport) || selectedReport.id}`;
+      const subtitle = reportTitleWithNumber(selectedReport);
       const executiveSummary = selectedItemIds.length
-        ? `${selectedItemIds.length} report item${selectedItemIds.length === 1 ? '' : 's'} compiled from ${reportTitle(selectedReport)}.`
-        : `Compiled report from ${reportTitle(selectedReport)}.`;
-      const bodyHtml = generatedBodyHtml({
+        ? `${selectedItemIds.length} report item${selectedItemIds.length === 1 ? '' : 's'} compiled from ${reportTitleWithNumber(selectedReport)}.`
+        : `Compiled report from ${reportTitleWithNumber(selectedReport)}.`;
+      const bodyMarkdown = generatedBodyMarkdown({
         report: selectedReport,
         items: reportItems,
         config: compiledConfig,
         selectedItemIds,
         itemFieldNames,
       });
+      const bodyHtml = markdownToHtml(bodyMarkdown);
       const result = await createCompiledReport({
         variables: {
           organisationId: activeOrganisationId,
@@ -581,6 +722,7 @@ export default function Reports() {
             title,
             subtitle,
             executiveSummary,
+            bodyMarkdown,
             bodyHtml,
             selectedItemIds,
             itemFieldNames,
@@ -602,7 +744,7 @@ export default function Reports() {
       title: compiledReport.title,
       subtitle: compiledReport.subtitle || '',
       executiveSummary: compiledReport.executiveSummary || '',
-      bodyHtml: compiledReport.bodyHtml || '',
+      bodyMarkdown: compiledReportEditableMarkdown(compiledReport),
     });
   };
 
@@ -618,7 +760,8 @@ export default function Reports() {
             title: compiledEditDraft.title,
             subtitle: compiledEditDraft.subtitle,
             executiveSummary: compiledEditDraft.executiveSummary,
-            bodyHtml: compiledEditDraft.bodyHtml,
+            bodyMarkdown: compiledEditDraft.bodyMarkdown,
+            bodyHtml: markdownToHtml(compiledEditDraft.bodyMarkdown),
           },
         },
       });
@@ -637,6 +780,27 @@ export default function Reports() {
       snapshot = compiledConfig;
     }
     downloadHtml(`${safeFilename(compiledReport.title)}.html`, compiledHtmlDocument(compiledReport, snapshot));
+  };
+
+  const handleDownloadCompiledMarkdown = (compiledReport) => {
+    downloadText(
+      `${safeFilename(compiledReport.title)}.md`,
+      compiledReportEditableMarkdown(compiledReport),
+      'text/markdown;charset=utf-8'
+    );
+  };
+
+  const handlePrintCompiledReport = (compiledReport) => {
+    let snapshot = compiledConfig;
+    try {
+      snapshot = { ...compiledConfig, ...JSON.parse(compiledReport.configSnapshot || '{}') };
+    } catch {
+      snapshot = compiledConfig;
+    }
+    const opened = printHtmlDocument(compiledHtmlDocument(compiledReport, snapshot));
+    if (!opened) {
+      setError('Unable to open the print window. Please allow pop-ups for this site and try again.');
+    }
   };
 
   const handleCreateReport = async (e) => {
@@ -741,7 +905,7 @@ export default function Reports() {
                       }}
                       aria-current={!isCreatingReport && String(report.id) === String(selectedReport?.id) ? 'page' : undefined}
                     >
-                      {reportTitle(report)}
+                      {reportTitleWithNumber(report)}
                     </button>
                   </div>
                 </div>
@@ -810,10 +974,10 @@ export default function Reports() {
             <div className="report-card report-detail-surface">
               <div className="report-header">
                 <div className="report-header-info">
-                  <h4>{reportTitle(selectedReport)}</h4>
+                  <h4>{reportTitleWithNumber(selectedReport)}</h4>
                   {editingReportId !== selectedReport.id && selectedReport.fieldValues.map(field => {
                     const value = displayValue(field);
-                    if (!value || value === reportTitle(selectedReport)) return null;
+                    if (!value || value === reportTitle(selectedReport) || value === reportNumber(selectedReport)) return null;
                     return <div key={field.name} className="report-meta-inline">{value}</div>;
                   })}
                 </div>
@@ -867,7 +1031,6 @@ export default function Reports() {
                 <div className="compiled-report-panel-header">
                   <div>
                     <h4>Compiled report</h4>
-                    <p>Choose the items and fields to include, then store a print-ready compiled version.</p>
                   </div>
                   {activeOrganisationCanWrite && (
                     <button
@@ -1052,24 +1215,39 @@ export default function Reports() {
                 <div className="compiled-report-panel-header">
                   <div>
                     <h4>Stored compiled reports</h4>
-                    <p>Every compile is kept here for viewing, editing, and download.</p>
                   </div>
                   {selectedCompiledReport && (
-                    <button
-                      type="button"
-                      className="create-report-button"
-                      onClick={() => handleDownloadCompiledReport(selectedCompiledReport)}
-                    >
-                      Download Compiled Report
-                    </button>
+                    <div className="item-actions">
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        onClick={() => handleDownloadCompiledMarkdown(selectedCompiledReport)}
+                      >
+                        Download Markdown
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        onClick={() => handleDownloadCompiledReport(selectedCompiledReport)}
+                      >
+                        Download HTML
+                      </button>
+                      <button
+                        type="button"
+                        className="create-report-button"
+                        onClick={() => handlePrintCompiledReport(selectedCompiledReport)}
+                      >
+                        Save as PDF
+                      </button>
+                    </div>
                   )}
                 </div>
-                {compiledReports.length === 0 ? (
-                  <p className="no-items-message">No compiled reports stored yet.</p>
+                {compiledReportsForSelectedReport.length === 0 ? (
+                  <p className="no-items-message">No compiled reports stored for this report yet.</p>
                 ) : (
                   <div className="compiled-report-browser">
                     <div className="compiled-report-list">
-                      {compiledReports.map(compiledReport => (
+                      {compiledReportsForSelectedReport.map(compiledReport => (
                         <button
                           key={compiledReport.id}
                           type="button"
@@ -1115,11 +1293,11 @@ export default function Reports() {
                               />
                             </label>
                             <label>
-                              Body HTML
+                              Body Markdown
                               <textarea
                                 className="compiled-body-editor"
-                                value={compiledEditDraft.bodyHtml}
-                                onChange={(e) => setCompiledEditDraft({ ...compiledEditDraft, bodyHtml: e.target.value })}
+                                value={compiledEditDraft.bodyMarkdown}
+                                onChange={(e) => setCompiledEditDraft({ ...compiledEditDraft, bodyMarkdown: e.target.value })}
                               />
                             </label>
                             <div className="item-actions">
@@ -1133,7 +1311,7 @@ export default function Reports() {
                               <h4>{selectedCompiledReport.title}</h4>
                               {selectedCompiledReport.subtitle && <p className="report-meta-inline">{selectedCompiledReport.subtitle}</p>}
                               {selectedCompiledReport.executiveSummary && <p>{selectedCompiledReport.executiveSummary}</p>}
-                              <div dangerouslySetInnerHTML={{ __html: selectedCompiledReport.bodyHtml }} />
+                              <div dangerouslySetInnerHTML={{ __html: compiledReportBodyHtml(selectedCompiledReport) }} />
                             </div>
                             {activeOrganisationCanWrite && (
                               <div className="item-actions">

@@ -128,6 +128,7 @@ export default `#graphql
     title: String!
     subtitle: String
     executiveSummary: String
+    bodyMarkdown: String
     bodyHtml: String!
     selectedItemIds: [Int!]!
     itemFieldNames: [String!]!
@@ -151,6 +152,7 @@ export default `#graphql
     title: String!
     subtitle: String
     executiveSummary: String
+    bodyMarkdown: String
     bodyHtml: String!
     selectedItemIds: [Int!]!
     itemFieldNames: [String!]
@@ -161,6 +163,7 @@ export default `#graphql
     title: String
     subtitle: String
     executiveSummary: String
+    bodyMarkdown: String
     bodyHtml: String
     selectedItemIds: [Int!]
     itemFieldNames: [String!]

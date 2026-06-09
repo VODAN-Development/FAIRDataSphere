@@ -26,21 +26,25 @@ export function displayValue(field) {
       return compactUri(field.value);
     }
   }
-  if (field.kind === 'group' || field.kind === 'location') {
+  if (field.kind === 'group' || field.kind === 'location' || field.kind === 'importClass') {
     let groupValue;
     try {
       groupValue = JSON.parse(field.value);
     } catch {
       return field.value;
     }
-    return (field.subfields || [])
+    const displayGroup = (valueGroup) => (field.subfields || [])
       .map(subfield => {
-        const value = groupValue?.[subfield.name];
+        const value = valueGroup?.[subfield.name];
         const display = Array.isArray(value) ? value.map(compactUri).join(', ') : compactUri(value);
         return display ? `${subfield.label || subfield.name}: ${display}` : null;
       })
       .filter(Boolean)
       .join(', ');
+    return (Array.isArray(groupValue) ? groupValue : [groupValue])
+      .map(displayGroup)
+      .filter(Boolean)
+      .join('; ');
   }
   if (field.kind === 'conditional') {
     let conditionalValue;
