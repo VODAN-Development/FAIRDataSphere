@@ -273,12 +273,12 @@ export default `#graphql
     # RDF structure and generic entity browsing.
     rdfStructure(organisationId: ID): RdfStructure!
     rdfStructurePresets(organisationId: ID): [RdfStructurePreset!]!
-    rdfEntities(entityType: String!, organisationId: ID): [RdfEntity!]!
+    rdfEntities(entityType: String!, organisationId: ID, limit: Int, offset: Int): [RdfEntity!]!
 
     # Report-item and report retrieval.
-    reportItems(organisationId: ID): [ReportItem!]!
+    reportItems(organisationId: ID, limit: Int, offset: Int): [ReportItem!]!
     reportItem(id: ID!, organisationId: ID): ReportItem
-    reports(organisationId: ID): [Report!]!
+    reports(organisationId: ID, limit: Int, offset: Int): [Report!]!
     report(id: ID!, organisationId: ID): Report
 
     # Compiled report retrieval.

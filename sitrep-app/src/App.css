@@ -2763,6 +2763,11 @@ nav a button {
   gap: 0.75rem;
 }
 
+.load-more-button {
+  align-self: center;
+  margin-top: 0.25rem;
+}
+
 .entity-instance-card {
   margin: 0;
 }

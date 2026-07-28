@@ -164,9 +164,10 @@ export function reloadPersistedRdfStructure() {
   return rdfStructureJson();
 }
 
-export function parseRdfStructureJson(json) {
+export function parseRdfStructureJson(json, { strict = false } = {}) {
   const nextStructure = normalizeStructure(JSON.parse(json));
   validateRdfStructure(nextStructure);
+  if (strict) validateDuplicateQueryablePredicates(nextStructure);
   return nextStructure;
 }
 
@@ -202,6 +203,54 @@ function validateRdfStructure(structure) {
       throw new Error(`URI template placeholder {${token}} for ${entityType} must match idField "${idField}"`);
     }
   });
+}
+
+function duplicatePredicatesInFields(fields = {}, contextPath) {
+  const byPredicate = new Map();
+  Object.entries(fields || {}).forEach(([fieldName, field]) => {
+    if (!field || typeof field !== "object" || !field.predicate || field.generated || field.metadataOnly) return;
+    const fieldPaths = byPredicate.get(field.predicate) || [];
+    fieldPaths.push(`${contextPath}.${fieldName}`);
+    byPredicate.set(field.predicate, fieldPaths);
+  });
+
+  const issues = Array.from(byPredicate.entries())
+    .filter(([, paths]) => paths.length > 1)
+    .map(([predicate, paths]) => ({ predicate, paths }));
+
+  Object.entries(fields || {}).forEach(([fieldName, field]) => {
+    if (!field || typeof field !== "object") return;
+    if (isGroupField(field)) {
+      issues.push(...duplicatePredicatesInFields(
+        Object.fromEntries(groupSubfieldEntries(field)),
+        `${contextPath}.${fieldName}`
+      ));
+    }
+    Object.entries(field.options || {}).forEach(([optionName, option]) => {
+      issues.push(...duplicatePredicatesInFields(
+        option.fields || {},
+        `${contextPath}.${fieldName}.options.${optionName}`
+      ));
+    });
+  });
+
+  return issues;
+}
+
+export function duplicateQueryablePredicateIssues(structure = RDF) {
+  return Object.keys({ ...(structure.classes || {}), ...(structure.uriTemplates || {}) })
+    .flatMap(entityType => duplicatePredicatesInFields(structure[entityType]?.fields || {}, entityType));
+}
+
+export function validateDuplicateQueryablePredicates(structure = RDF) {
+  const issues = duplicateQueryablePredicateIssues(structure);
+  if (issues.length === 0) return;
+  const summary = issues
+    .slice(0, 5)
+    .map(issue => `${issue.predicate} is used by ${issue.paths.join(", ")}`)
+    .join("; ");
+  const extra = issues.length > 5 ? `; and ${issues.length - 5} more duplicate predicate group(s)` : "";
+  throw new Error(`RDF structure has duplicate predicates that would make data queries ambiguous: ${summary}${extra}`);
 }
 
 function normalizeStructure(structure) {
@@ -707,8 +756,13 @@ export function selectVariables(fields) {
 export function fieldPatterns(subject, fields) {
   // Query patterns mirror field definitions and make optional fields optional in
   // SPARQL so missing values do not hide the whole entity.
+  const seenOptionalPredicates = new Set();
   return Object.entries(fields)
     .map(([fieldName, field]) => {
+      if (!field.required && field.predicate) {
+        if (seenOptionalPredicates.has(field.predicate)) return "";
+        seenOptionalPredicates.add(field.predicate);
+      }
       if (field.options) {
         const optionPatterns = Object.values(field.options).map(() => `{ ${subject} ${field.predicate} ?${fieldName} . }`);
         const pattern = optionPatterns.length > 0
@@ -720,6 +774,7 @@ export function fieldPatterns(subject, fields) {
       const pattern = triplePattern;
       return field.required ? pattern : `OPTIONAL { ${pattern} }`;
     })
+    .filter(Boolean)
     .join("\n");
 }
 

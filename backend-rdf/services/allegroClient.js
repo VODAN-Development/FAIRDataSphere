@@ -134,7 +134,17 @@ export async function runSparqlQuery(query) {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`SPARQL Error ${response.status}: ${text}`);
+    const friendlyDetail = /request-request-body|revproxy::req|request-method/.test(text)
+      ? "AllegroGraph rejected this generated query. This is often caused by duplicate predicates in the RDF structure or a query that expands too broadly."
+      : text;
+    console.error("SPARQL query failed", {
+      repository: config.repository,
+      username: config.username,
+      status: response.status,
+      query,
+      response: text,
+    });
+    throw new Error(`SPARQL Error ${response.status}: ${friendlyDetail}`);
   }
 
   return response.json();
@@ -155,6 +165,13 @@ export async function runSparqlUpdate(update) {
 
   if (!response.ok) {
     const text = await response.text();
+    console.error("SPARQL update failed", {
+      repository: config.repository,
+      username: config.username,
+      status: response.status,
+      update,
+      response: text,
+    });
     throw new Error(`SPARQL Update Error ${response.status}: ${text}`);
   }
 

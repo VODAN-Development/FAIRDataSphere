@@ -64,8 +64,8 @@ const RDF_FIELD_VALUE_FIELDS = gql`
 
 const GET_RDF_ENTITIES = gql`
   ${RDF_FIELD_VALUE_FIELDS}
-  query GetRdfEntities($entityType: String!, $organisationId: ID) {
-    rdfEntities(entityType: $entityType, organisationId: $organisationId) {
+  query GetRdfEntities($entityType: String!, $organisationId: ID, $limit: Int, $offset: Int) {
+    rdfEntities(entityType: $entityType, organisationId: $organisationId, limit: $limit, offset: $offset) {
       entityType
       id
       uri
@@ -79,8 +79,8 @@ const GET_RDF_ENTITIES = gql`
 
 const GET_REPORT_ITEMS = gql`
   ${RDF_FIELD_VALUE_FIELDS}
-  query GetReportItems($organisationId: ID) {
-    reportItems(organisationId: $organisationId) {
+  query GetReportItems($organisationId: ID, $limit: Int, $offset: Int) {
+    reportItems(organisationId: $organisationId, limit: $limit, offset: $offset) {
       entryNumber
       uri
       reportId
@@ -97,8 +97,8 @@ const GET_REPORT_ITEMS = gql`
 `;
 
 const GET_REPORTS = gql`
-  query GetReports($organisationId: ID) {
-    reports(organisationId: $organisationId) {
+  query GetReports($organisationId: ID, $limit: Int, $offset: Int) {
+    reports(organisationId: $organisationId, limit: $limit, offset: $offset) {
       id
       selectedItemIds
       createdAt
@@ -174,6 +174,8 @@ function entityTitle(entity) {
   return primaryValue || `${titleForEntity(entity.entityType)} #${entity.id}`;
 }
 
+const PAGE_SIZE = 100;
+
 export default function Items() {
   // Items displays built-in report items and custom RDF entities, with dynamic
   // edit forms generated from the active RDF structure.
@@ -185,7 +187,7 @@ export default function Items() {
   const [editingKey, setEditingKey] = useState('');
   const [editValues, setEditValues] = useState({});
 
-  const queryVariables = { organisationId: activeOrganisationId };
+  const queryVariables = { organisationId: activeOrganisationId, limit: PAGE_SIZE, offset: 0 };
   const refetchScopedQueries = [
     { query: GET_REPORT_ITEMS, variables: queryVariables },
     { query: GET_REPORTS, variables: queryVariables },
@@ -213,14 +215,17 @@ export default function Items() {
       ? 'reportItem'
       : entityTypes[0] || '';
 
-  const { data: entitiesData, loading: entitiesLoading, error: entitiesError, refetch: refetchEntities } = useQuery(
+  const [hasMoreItems, setHasMoreItems] = useState(true);
+  const [hasMoreEntities, setHasMoreEntities] = useState(true);
+
+  const { data: entitiesData, loading: entitiesLoading, error: entitiesError, refetch: refetchEntities, fetchMore: fetchMoreEntities } = useQuery(
     GET_RDF_ENTITIES,
     {
-      variables: { entityType: activeEntityType, organisationId: activeOrganisationId },
+      variables: { entityType: activeEntityType, organisationId: activeOrganisationId, limit: PAGE_SIZE, offset: 0 },
       skip: (!activeOrganisationId && !activeOrganisationIsUnscoped) || !activeEntityType || activeEntityType === 'reportItem',
     }
   );
-  const { data: itemsData, loading: itemsLoading, error: itemsError, refetch: refetchItems } = useQuery(GET_REPORT_ITEMS, {
+  const { data: itemsData, loading: itemsLoading, error: itemsError, refetch: refetchItems, fetchMore: fetchMoreItems } = useQuery(GET_REPORT_ITEMS, {
     variables: queryVariables,
     skip: !activeOrganisationId && !activeOrganisationIsUnscoped,
   });
@@ -260,6 +265,11 @@ export default function Items() {
     };
   }, [refetchItems, refetchReports, refetchEntities, activeEntityType]);
 
+  useEffect(() => {
+    setHasMoreItems(true);
+    setHasMoreEntities(true);
+  }, [activeEntityType, activeOrganisationId]);
+
   const reportItems = itemsData?.reportItems || [];
   const reports = reportsData?.reports || [];
   const entities = entitiesData?.rdfEntities || [];
@@ -268,6 +278,32 @@ export default function Items() {
   const reportsAvailableForItem = (item) => reports.filter(report =>
     !(report.selectedItemIds || []).some(itemId => Number(itemId) === Number(item.entryNumber))
   );
+
+  const loadMoreReportItems = async () => {
+    const result = await fetchMoreItems({
+      variables: { ...queryVariables, offset: reportItems.length },
+      updateQuery: (previous, { fetchMoreResult }) => ({
+        reportItems: [
+          ...(previous.reportItems || []),
+          ...(fetchMoreResult?.reportItems || []),
+        ],
+      }),
+    });
+    setHasMoreItems((result.data?.reportItems || []).length === PAGE_SIZE);
+  };
+
+  const loadMoreEntities = async () => {
+    const result = await fetchMoreEntities({
+      variables: { entityType: activeEntityType, organisationId: activeOrganisationId, limit: PAGE_SIZE, offset: entities.length },
+      updateQuery: (previous, { fetchMoreResult }) => ({
+        rdfEntities: [
+          ...(previous.rdfEntities || []),
+          ...(fetchMoreResult?.rdfEntities || []),
+        ],
+      }),
+    });
+    setHasMoreEntities((result.data?.rdfEntities || []).length === PAGE_SIZE);
+  };
   const startEditing = (key, fields) => {
     setActionError('');
     setFieldErrors({});
@@ -537,6 +573,11 @@ export default function Items() {
                     </div>
                   );
                 })}
+                {hasMoreItems && reportItems.length >= PAGE_SIZE && (
+                  <button type="button" className="secondary-btn load-more-button" onClick={loadMoreReportItems} disabled={loading}>
+                    Load more
+                  </button>
+                )}
               </div>
             )
           ) : (
@@ -616,6 +657,11 @@ export default function Items() {
                     );
                   })()
                 ))}
+                {hasMoreEntities && entities.length >= PAGE_SIZE && (
+                  <button type="button" className="secondary-btn load-more-button" onClick={loadMoreEntities} disabled={loading}>
+                    Load more
+                  </button>
+                )}
               </div>
             )
           )}

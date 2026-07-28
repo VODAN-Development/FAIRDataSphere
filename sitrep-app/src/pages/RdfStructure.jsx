@@ -246,6 +246,50 @@ function classPropertyRowsForStructure(structure) {
   return rows;
 }
 
+function duplicatePredicatesInFields(fields = {}, contextPath) {
+  const byPredicate = new Map();
+  Object.entries(fields || {}).forEach(([fieldName, field]) => {
+    if (!field || typeof field !== 'object' || !field.predicate || field.generated || field.metadataOnly) return;
+    const paths = byPredicate.get(field.predicate) || [];
+    paths.push(`${contextPath}.${fieldName}`);
+    byPredicate.set(field.predicate, paths);
+  });
+
+  const issues = Array.from(byPredicate.entries())
+    .filter(([, paths]) => paths.length > 1)
+    .map(([predicate, paths]) => ({ predicate, paths }));
+
+  Object.entries(fields || {}).forEach(([fieldName, field]) => {
+    if (!field || typeof field !== 'object') return;
+    if (isGroupField(field)) {
+      issues.push(...duplicatePredicatesInFields(
+        Object.fromEntries(groupSubfieldEntries(field)),
+        `${contextPath}.${fieldName}`
+      ));
+    }
+    Object.entries(field.options || {}).forEach(([optionName, option]) => {
+      issues.push(...duplicatePredicatesInFields(
+        option.fields || {},
+        `${contextPath}.${fieldName}.options.${optionName}`
+      ));
+    });
+  });
+
+  return issues;
+}
+
+function validateDuplicatePredicates(structure) {
+  const issues = Object.keys({ ...(structure?.classes || {}), ...(structure?.uriTemplates || {}) })
+    .flatMap(entityType => duplicatePredicatesInFields(structure?.[entityType]?.fields || {}, entityType));
+  if (issues.length === 0) return;
+  const summary = issues
+    .slice(0, 5)
+    .map(issue => `${issue.predicate} is used by ${issue.paths.join(', ')}`)
+    .join('; ');
+  const extra = issues.length > 5 ? `; and ${issues.length - 5} more duplicate predicate group(s)` : '';
+  throw new Error(`Duplicate predicates would make data queries ambiguous: ${summary}${extra}`);
+}
+
 function jsonRowsForStructureJson(json) {
   const formattedJson = JSON.stringify(JSON.parse(json), null, 2);
   const rows = [['Chunk']];
@@ -3295,7 +3339,9 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
   };
 
   const buildStructure = () => {
-    return refreshImportedClassFieldsInStructure(applyDefaultDatatypesToStructure(JSON.parse(sourceJson)));
+    const nextStructure = refreshImportedClassFieldsInStructure(applyDefaultDatatypesToStructure(JSON.parse(sourceJson)));
+    validateDuplicatePredicates(nextStructure);
+    return nextStructure;
   };
 
   const handleSave = async () => {
@@ -3380,7 +3426,9 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
   };
 
   const importStructureJson = async (json) => {
-    const formattedJson = JSON.stringify(JSON.parse(json), null, 2);
+    const importedStructure = refreshImportedClassFieldsInStructure(applyDefaultDatatypesToStructure(JSON.parse(json)));
+    validateDuplicatePredicates(importedStructure);
+    const formattedJson = JSON.stringify(importedStructure, null, 2);
     const importMode = window.confirm('Import this file as a preset?\n\nChoose Cancel to replace the current RDF structure instead.')
       ? 'preset'
       : 'current';
