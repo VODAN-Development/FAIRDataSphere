@@ -20,6 +20,8 @@ const UPDATE_MY_PASSWORD = gql`
 `;
 
 export default function Account() {
+  // Account keeps profile, password, and role details in separate panels while
+  // sharing the current user from AuthProvider.
   const { user } = useAuth();
   const [activePanel, setActivePanel] = useState('profile');
   const [name, setName] = useState(user?.name || '');
@@ -54,6 +56,7 @@ export default function Account() {
     setPasswordError('');
     setPasswordMessage('');
 
+    // Confirm locally before sending the password update mutation.
     if (newPassword !== confirmPassword) {
       setPasswordError('New passwords do not match.');
       return;

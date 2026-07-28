@@ -2,6 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 const isProduction = process.env.NODE_ENV === "production";
 
+// Required deployment values throw in production but keep local defaults for
+// developers running the backend against a local AllegroGraph instance.
 function envValue(name, fallback) {
   const value = process.env[name];
   if (value) return value;
@@ -17,6 +19,8 @@ const DEFAULT_USERNAME = envValue("ALLEGRO_USERNAME", "admin");
 const DEFAULT_PASSWORD = envValue("ALLEGRO_PASSWORD", "sitrep-dev-password-change-me");
 const DEFAULT_CATALOG = envValue("ALLEGRO_CATALOG", "/");
 
+// AsyncLocalStorage carries the active organisation repository through nested
+// resolver calls without threading repository parameters through every helper.
 const repositoryContext = new AsyncLocalStorage();
 
 function basicAuth(username, password) {
@@ -67,6 +71,8 @@ export function withRepository(repositoryConfig, callback) {
   return repositoryContext.run(repositoryConfig || defaultRepositoryConfig(), callback);
 }
 
+// Repository administration uses the default admin credentials, while SPARQL
+// reads/writes below use the active organisation repository context.
 export async function createRepository(repository) {
   const response = await fetch(repositoryUrl(repository), {
     method: "PUT",
@@ -83,7 +89,7 @@ export async function deleteRepository(repository) {
   await assertDeleteOk(response, `Delete repository ${repository}`);
 }
 
-export async function createRepositoryUser({ username, password, repository, write = true }) {
+export async function createRepositoryUser({ username, password, repository, write = true, queryResultsLimit = false }) {
   const userParams = new URLSearchParams({ password });
   const userResponse = await fetch(`${ALLEGRO_BASE_URL}/users/${encodeURIComponent(username)}?${userParams}`, {
     method: "PUT",
@@ -94,6 +100,7 @@ export async function createRepositoryUser({ username, password, repository, wri
   const accessParams = new URLSearchParams({
     read: "true",
     write: write ? "true" : "false",
+    "query-results-limit": queryResultsLimit ? "true" : "false",
     catalog: DEFAULT_CATALOG,
     repository,
   });
@@ -114,6 +121,7 @@ export async function deleteRepositoryUser(username) {
 
 export async function runSparqlQuery(query) {
   const config = activeRepositoryConfig();
+  // AllegroGraph returns SPARQL JSON bindings for SELECT queries.
   const response = await fetch(repositoryUrl(config.repository), {
     method: "POST",
     headers: {
@@ -134,6 +142,7 @@ export async function runSparqlQuery(query) {
 
 export async function runSparqlUpdate(update) {
   const config = activeRepositoryConfig();
+  // Updates cover INSERT/DELETE operations and return plain text diagnostics.
   const response = await fetch(repositoryUrl(config.repository), {
     method: "POST",
     headers: {

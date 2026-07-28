@@ -1,3 +1,4 @@
+/* Application layout shell, shared page surfaces, and dashboard styles. */
 #root {
   width: 100%;
   min-height: 100vh;
@@ -97,6 +98,7 @@
   color: var(--color-on-surface-muted);
 }
 
+/* Home dashboard panels and workspace summary. */
 .home-dashboard-page {
   display: grid;
   align-content: start;
@@ -344,6 +346,7 @@ nav a button {
   cursor: pointer;
 }
 
+/* Authentication and account-management screens. */
 .auth-status {
   padding: 2rem;
   color: var(--color-on-surface);
@@ -530,8 +533,13 @@ nav a button {
   justify-self: center;
 }
 
+/* Data input, about, and organisation browser-style page layouts. */
 .data-input-browser-window {
   grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
+}
+
+.data-input-mode-browser-window {
+  grid-template-columns: 1fr;
 }
 
 .data-input-sidebar {
@@ -564,6 +572,23 @@ nav a button {
   color: var(--color-primary);
 }
 
+.data-input-back-button {
+  min-height: 2.25rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 6px;
+  background-color: var(--color-surface);
+  color: var(--color-on-surface);
+  cursor: pointer;
+  font-weight: 700;
+  text-align: left;
+}
+
+.data-input-back-button:hover {
+  border-color: var(--color-secondary);
+  color: var(--color-secondary);
+}
+
 .data-input-detail-pane {
   display: grid;
   align-content: start;
@@ -583,6 +608,116 @@ nav a button {
   margin-top: 0;
   box-sizing: border-box;
   justify-self: center;
+}
+
+.data-input-mode-pane {
+  align-content: center;
+  justify-items: center;
+  padding: 1rem;
+}
+
+.data-input-mode-choice {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(12rem, 18rem));
+  justify-content: center;
+  gap: 1rem;
+  width: min(100%, 38rem);
+  margin: 0 auto;
+}
+
+.data-input-mode-card {
+  display: grid;
+  gap: 0.45rem;
+  min-height: 8rem;
+  padding: 1rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 8px;
+  background-color: var(--color-surface);
+  color: var(--color-on-surface);
+  cursor: pointer;
+  text-align: left;
+}
+
+.data-input-mode-card:hover {
+  border-color: var(--color-primary);
+  background-color: var(--color-accent-container);
+}
+
+.data-input-mode-card strong {
+  color: var(--color-heading);
+  font-size: 1.05rem;
+}
+
+.data-input-mode-card span {
+  color: var(--color-on-surface-muted);
+  line-height: 1.4;
+}
+
+.data-import-form {
+  display: grid;
+  gap: 1rem;
+  width: min(100%, 520px);
+  justify-self: center;
+  padding: 1rem;
+  border: 1px solid var(--color-border-muted);
+  border-radius: 8px;
+  background-color: var(--color-surface-raised);
+}
+
+.data-import-template-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.data-import-template-actions button {
+  min-height: 2.25rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--color-primary);
+  border-radius: 6px;
+  background-color: var(--color-surface);
+  color: var(--color-primary);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.data-import-template-actions button:hover:not(:disabled) {
+  background-color: var(--color-accent-container);
+}
+
+.data-import-template-actions button:disabled {
+  border-color: var(--color-disabled);
+  color: var(--color-disabled);
+  cursor: not-allowed;
+}
+
+.data-import-dropzone {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1.25rem;
+  border: 1px dashed var(--color-border-empty);
+  border-radius: 8px;
+  background-color: var(--color-surface);
+  color: var(--color-on-surface);
+  font-weight: 700;
+}
+
+.data-import-dropzone input {
+  width: 100%;
+}
+
+.data-import-file {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 6px;
+  background-color: var(--color-surface);
+}
+
+.data-import-file span {
+  color: var(--color-on-surface-muted);
 }
 
 .about-browser-window {
@@ -928,6 +1063,120 @@ nav a button {
   gap: 0.7rem;
 }
 
+.organisation-role-layout {
+  display: grid;
+  grid-template-columns: minmax(16rem, 0.9fr) minmax(20rem, 1.1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.organisation-role-layout h4 {
+  margin: 0;
+}
+
+.organisation-roles-pane,
+.organisation-roles-list,
+.organisation-role-editor,
+.organisation-create-role {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.organisation-roles-pane {
+  padding: 0.85rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 6px;
+  background-color: var(--color-surface-variant);
+}
+
+.organisation-role-card {
+  display: grid;
+  gap: 0.15rem;
+  width: 100%;
+  min-height: 3.25rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 6px;
+  background-color: var(--color-surface);
+  color: var(--color-on-surface);
+  cursor: pointer;
+  text-align: left;
+}
+
+.organisation-role-card:hover,
+.organisation-role-card.selected {
+  border-color: var(--color-primary);
+  background-color: var(--color-accent-container);
+}
+
+.organisation-role-card strong,
+.organisation-role-card span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.organisation-role-card span {
+  color: var(--color-on-surface-subtle);
+  font-size: 0.82rem;
+}
+
+.organisation-role-editor,
+.organisation-create-role {
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-border-soft);
+}
+
+.organisation-role-editor-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.organisation-permission-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.45rem;
+}
+
+.organisation-permission-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.45rem;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 6px;
+  background-color: var(--color-surface);
+  color: var(--color-on-surface);
+  font-weight: 600;
+}
+
+.organisation-permission-toggle input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+}
+
+.organisation-role-editor button,
+.organisation-create-role button {
+  justify-self: start;
+  padding: 0.55rem 0.85rem;
+  border: none;
+  border-radius: 4px;
+  background-color: var(--color-primary);
+  color: var(--color-on-primary);
+  font-weight: 700;
+}
+
+.organisation-role-editor button:disabled,
+.organisation-create-role button:disabled {
+  background-color: var(--color-disabled);
+  cursor: not-allowed;
+}
+
 .organisation-repository {
   display: grid;
   gap: 0.65rem;
@@ -967,6 +1216,11 @@ nav a button {
 
 .organisation-repository dd a {
   color: var(--color-primary);
+}
+
+.organisation-repository.compact {
+  padding: 0.65rem;
+  background-color: var(--color-surface);
 }
 
 .organisation-danger-zone {
@@ -1396,6 +1650,7 @@ nav a button {
   text-align: center;
 }
 
+/* RDF structure editor, schema tables, class sidebar, and suggestion inputs. */
 .rdf-editor-section {
   margin: 1rem 0;
 }
@@ -1956,6 +2211,115 @@ nav a button {
   margin: 0;
 }
 
+.rdf-field-options-layout {
+  display: grid;
+  grid-template-columns: minmax(14rem, 0.8fr) minmax(20rem, 1.2fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.rdf-fields-pane,
+.rdf-field-options-pane {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.rdf-field-options-pane {
+  padding-left: 1rem;
+  border-left: 1px solid var(--color-border-soft);
+}
+
+.rdf-pane-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.rdf-pane-heading h4 {
+  margin: 0;
+  color: var(--color-heading);
+}
+
+.rdf-field-card-list,
+.rdf-field-options-form {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.rdf-field-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.6rem;
+  align-items: center;
+  width: 100%;
+  min-height: 3.1rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 6px;
+  background-color: var(--color-surface-variant);
+  color: var(--color-on-surface);
+  cursor: pointer;
+  text-align: left;
+}
+
+.rdf-field-card:hover,
+.rdf-field-card.selected {
+  border-color: var(--color-primary);
+  background-color: var(--color-accent-container);
+}
+
+.rdf-field-card strong,
+.rdf-field-card small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.rdf-field-card small {
+  color: var(--color-on-surface-muted);
+  font-size: 0.78rem;
+}
+
+.rdf-field-options-form label {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+  color: var(--color-on-surface);
+  font-weight: 700;
+}
+
+.rdf-field-options-form input,
+.rdf-field-options-form select {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 2rem;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--color-border-field);
+  border-radius: 4px;
+  background-color: var(--color-surface);
+  color: var(--color-on-surface);
+}
+
+.rdf-option-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.rdf-option-toggle input {
+  width: 1rem;
+  height: 1rem;
+  min-height: 0;
+  margin: 0;
+}
+
+.rdf-field-options-pane .rdf-subfields {
+  grid-column: auto;
+  margin: 0;
+}
+
 .rdf-window-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2376,6 +2740,8 @@ nav a button {
   display: block;
 }
 
+/* Shared split-pane browser layout used by RDF, reports, account, organisation,
+   data input, and about screens. */
 .app-browser-window {
   width: min(1180px, 100%);
   max-width: 100%;
@@ -2442,12 +2808,28 @@ nav a button {
     grid-template-columns: 1fr;
   }
 
+  .rdf-field-options-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .rdf-field-options-pane {
+    padding-top: 1rem;
+    padding-left: 0;
+    border-top: 1px solid var(--color-border-soft);
+    border-left: 0;
+  }
+
   .rdf-class-sidebar {
     position: static;
     max-height: none;
   }
 
   .organisation-access-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .organisation-role-layout,
+  .organisation-role-editor-header {
     grid-template-columns: 1fr;
   }
 }
@@ -2713,6 +3095,20 @@ nav a button {
   background-color: var(--color-surface-raised);
   border: 1px solid var(--color-border-muted);
   border-radius: 8px;
+}
+
+.report-automation-panel {
+  margin-bottom: 1rem;
+}
+
+.report-automation-form,
+.report-automation-section {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.automation-list {
+  max-height: 180px;
 }
 
 .compiled-report-panel-header {

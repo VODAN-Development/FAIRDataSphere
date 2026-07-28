@@ -3,6 +3,7 @@ import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth.js';
 
 export default function Login() {
+  // Login redirects back to the protected route that sent the user here.
   const { user, signIn } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
@@ -17,6 +18,8 @@ export default function Login() {
   }
 
   async function handleSubmit(event) {
+    // signIn sets the server-side cookie through AuthProvider, then navigation
+    // returns the user to their intended destination.
     event.preventDefault();
     setError('');
     setSubmitting(true);

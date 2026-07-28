@@ -4,6 +4,8 @@ const SESSION_COOKIE = "sitrep_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const DEFAULT_SECRET = "sitrep-dev-secret-change-me";
 
+// Production must provide a stable secret; development gets a default so local
+// sign-in works without extra setup.
 function secret() {
   const configured = process.env.AUTH_SECRET || process.env.JWT_SECRET;
   if (configured) return configured;
@@ -17,6 +19,7 @@ function base64Url(input) {
   return Buffer.from(input).toString("base64url");
 }
 
+// Session tokens are compact HMAC-signed payloads rather than database sessions.
 function sign(payload) {
   return crypto
     .createHmac("sha256", secret())
@@ -37,6 +40,8 @@ export function createSessionToken(user) {
 export function verifySessionToken(token) {
   if (!token || !token.includes(".")) return null;
   const [payload, signature] = token.split(".");
+  // Recompute the signature before parsing payload content so tampered cookies
+  // never reach JSON handling or expiry checks.
   if (sign(payload) !== signature) return null;
 
   try {

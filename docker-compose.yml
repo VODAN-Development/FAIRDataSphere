@@ -1,5 +1,7 @@
 services:
   caddy:
+    # Caddy terminates public HTTP/HTTPS and routes each configured domain to the
+    # correct internal service.
     image: caddy:2.9-alpine
     restart: unless-stopped
     env_file:
@@ -18,6 +20,7 @@ services:
         condition: service_healthy
 
   allegrograph:
+    # AllegroGraph stores RDF data; only localhost gets a direct host port.
     image: franzinc/agraph:v9.1.0.t2
     restart: unless-stopped
     environment:
@@ -32,6 +35,8 @@ services:
       - "127.0.0.1:10035:10035"
 
   backend:
+    # Backend exposes GraphQL, auth cookies, organisation metadata, and SPARQL
+    # access to the active repository.
     build:
       context: ./backend-rdf
     restart: unless-stopped
@@ -52,6 +57,8 @@ services:
       start_period: 10s
 
   frontend:
+    # Frontend is built with the public GraphQL URL baked into Vite output and
+    # served by nginx inside the container.
     build:
       context: ./sitrep-app
       args:
@@ -64,6 +71,7 @@ services:
         condition: service_healthy
 
 volumes:
+  # Named volumes keep service state across container recreations.
   allegrograph_data:
   caddy_data:
   caddy_config:

@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { RELEASE_NOTES } from '../content/releaseNotes.js';
 
 function ReleaseNotes() {
+  // Release notes are static content rendered from data so updates do not require
+  // changing the page markup.
   if (RELEASE_NOTES.length === 0) {
     return <p>Release notes will be posted here.</p>;
   }
@@ -38,6 +40,7 @@ function ReleaseNotes() {
 }
 
 const ABOUT_SECTIONS = {
+  // The sidebar is data-driven; add a section here to expose another About tab.
   overview: {
     label: 'Overview',
     title: 'Overview',
@@ -55,6 +58,8 @@ const ABOUT_SECTIONS = {
 };
 
 export default function About() {
+  // About is a small tabbed view for static product information and release
+  // history.
   const [activeSectionKey, setActiveSectionKey] = useState('overview');
   const activeSection = ABOUT_SECTIONS[activeSectionKey];
 

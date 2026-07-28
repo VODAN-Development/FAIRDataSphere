@@ -57,6 +57,7 @@ const DELETE_RDF_STRUCTURE_PRESET = gql`
   }
 `;
 
+// Input type choices drive both UI controls and default RDF datatypes.
 const datatypeByInputType = {
   text: 'xsd:string',
   textarea: 'xsd:string',
@@ -100,8 +101,10 @@ const classPropertyOptions = [
 const groupPropertyNames = new Set(['label', 'predicate', 'inputType', 'required', 'resourceMode', 'className', 'targetEntityType', 'targetClass', 'targetTemplate', 'targetLabelField', 'importedFields']);
 const protectedEntityTypes = new Set(['report', 'reportItem']);
 
-function downloadJsonFile(filename, json) {
-  const blob = new Blob([json.endsWith('\n') ? json : `${json}\n`], { type: 'application/json' });
+function downloadFile(filename, content, type) {
+  // Preset exports are client-side downloads so users can archive/share a
+  // structure without a separate backend endpoint.
+  const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
@@ -112,6 +115,10 @@ function downloadJsonFile(filename, json) {
   URL.revokeObjectURL(url);
 }
 
+function downloadJsonFile(filename, json) {
+  downloadFile(filename, json.endsWith('\n') ? json : `${json}\n`, 'application/json');
+}
+
 function safeFilename(value, fallback) {
   return String(value || fallback)
     .trim()
@@ -119,6 +126,625 @@ function safeFilename(value, fallback) {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     || fallback;
+}
+
+function fieldRowsForStructure(structure) {
+  const rows = [[
+    'Entity type',
+    'Field path',
+    'Label',
+    'Predicate',
+    'Value mode',
+    'Input type',
+    'Datatype',
+    'Required',
+    'Multiple',
+    'Target entity type',
+    'Options',
+  ]];
+
+  const addFieldRows = (entityType, fieldPath, field = {}) => {
+    const kind = fieldKind(field);
+    rows.push([
+      entityType,
+      fieldPath,
+      field.label || '',
+      field.predicate || '',
+      kind,
+      field.inputType || '',
+      field.datatype || '',
+      field.required ? 'yes' : 'no',
+      field.allowMultiple ? 'yes' : 'no',
+      field.targetEntityType || '',
+      field.options ? Object.keys(field.options).join(';') : '',
+    ]);
+
+    if (kind === 'group' || kind === 'importClass') {
+      groupSubfieldEntries(field).forEach(([subfieldName, subfield]) => {
+        addFieldRows(entityType, `${fieldPath}.${subfieldName}`, subfield);
+      });
+    }
+
+    if (field.options) {
+      Object.entries(field.options).forEach(([optionName, option]) => {
+        Object.entries(option.fields || {}).forEach(([subfieldName, subfield]) => {
+          addFieldRows(entityType, `${fieldPath}.${optionName}.${subfieldName}`, subfield);
+        });
+      });
+    }
+  };
+
+  Object.keys({ ...(structure?.classes || {}), ...(structure?.uriTemplates || {}) }).forEach(entityType => {
+    const entity = structure?.[entityType] || {};
+    const fields = {
+      ...(entity.fields || {}),
+      ...(entity.arrays || {}),
+      ...(entity.nested || {}),
+    };
+    Object.entries(fields).forEach(([fieldName, field]) => addFieldRows(entityType, fieldName, field));
+  });
+
+  return rows;
+}
+
+function classRowsForStructure(structure) {
+  const rows = [['Entity type', 'Class IRI', 'URI template', 'ID field']];
+  Object.keys({ ...(structure?.classes || {}), ...(structure?.uriTemplates || {}) }).forEach(entityType => {
+    rows.push([
+      entityType,
+      structure?.classes?.[entityType] || '',
+      structure?.uriTemplates?.[entityType] || '',
+      structure?.[entityType]?.idField || '',
+    ]);
+  });
+  return rows;
+}
+
+function entityTypeForClassTerm(structure, value) {
+  if (structure?.classes?.[value]) return value;
+  return Object.entries(structure?.classes || {})
+    .find(([, classIri]) => classIri === value)?.[0] || '';
+}
+
+function classTermForStructureValue(structure, value) {
+  return structure?.classes?.[value] || value || '';
+}
+
+function classPropertyRowsForStructure(structure) {
+  const rows = [[
+    'Source',
+    'Source class IRI',
+    'Predicate',
+    'Target',
+    'Target class IRI',
+    'Defined in',
+  ]];
+
+  Object.entries(structure?.equivalentClasses || {}).forEach(([subject, equivalentClass]) => {
+    equivalentClassValues(equivalentClass).forEach(object => {
+      rows.push([
+        subject,
+        classTermForStructureValue(structure, subject),
+        'owl:equivalentClass',
+        entityTypeForClassTerm(structure, object) || object,
+        classTermForStructureValue(structure, object),
+        'equivalentClasses',
+      ]);
+    });
+  });
+
+  (structure?.classProperties || []).forEach(property => {
+    rows.push([
+      property.subject || '',
+      classTermForStructureValue(structure, property.subject),
+      property.predicate || '',
+      entityTypeForClassTerm(structure, property.object) || property.object || '',
+      classTermForStructureValue(structure, property.object),
+      'classProperties',
+    ]);
+  });
+  return rows;
+}
+
+function jsonRowsForStructureJson(json) {
+  const formattedJson = JSON.stringify(JSON.parse(json), null, 2);
+  const rows = [['Chunk']];
+  for (let index = 0; index < formattedJson.length; index += 30000) {
+    rows.push([formattedJson.slice(index, index + 30000)]);
+  }
+  return rows;
+}
+
+const crcTable = Array.from({ length: 256 }, (_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) {
+    value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+  }
+  return value >>> 0;
+});
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  bytes.forEach(byte => {
+    crc = crcTable[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  });
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function writeUint16(bytes, value) {
+  bytes.push(value & 0xff, (value >>> 8) & 0xff);
+}
+
+function writeUint32(bytes, value) {
+  bytes.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff);
+}
+
+function zipFiles(files) {
+  const encoder = new TextEncoder();
+  const output = [];
+  const centralDirectory = [];
+  let offset = 0;
+
+  files.forEach(file => {
+    const nameBytes = encoder.encode(file.name);
+    const contentBytes = encoder.encode(file.content);
+    const checksum = crc32(contentBytes);
+    const localHeaderOffset = offset;
+    const localHeader = [];
+
+    writeUint32(localHeader, 0x04034b50);
+    writeUint16(localHeader, 20);
+    writeUint16(localHeader, 0);
+    writeUint16(localHeader, 0);
+    writeUint16(localHeader, 0);
+    writeUint16(localHeader, 0);
+    writeUint32(localHeader, checksum);
+    writeUint32(localHeader, contentBytes.length);
+    writeUint32(localHeader, contentBytes.length);
+    writeUint16(localHeader, nameBytes.length);
+    writeUint16(localHeader, 0);
+    output.push(...localHeader, ...nameBytes, ...contentBytes);
+    offset += localHeader.length + nameBytes.length + contentBytes.length;
+
+    const centralHeader = [];
+    writeUint32(centralHeader, 0x02014b50);
+    writeUint16(centralHeader, 20);
+    writeUint16(centralHeader, 20);
+    writeUint16(centralHeader, 0);
+    writeUint16(centralHeader, 0);
+    writeUint16(centralHeader, 0);
+    writeUint16(centralHeader, 0);
+    writeUint32(centralHeader, checksum);
+    writeUint32(centralHeader, contentBytes.length);
+    writeUint32(centralHeader, contentBytes.length);
+    writeUint16(centralHeader, nameBytes.length);
+    writeUint16(centralHeader, 0);
+    writeUint16(centralHeader, 0);
+    writeUint16(centralHeader, 0);
+    writeUint16(centralHeader, 0);
+    writeUint32(centralHeader, 0);
+    writeUint32(centralHeader, localHeaderOffset);
+    centralDirectory.push(...centralHeader, ...nameBytes);
+  });
+
+  const centralDirectoryOffset = offset;
+  output.push(...centralDirectory);
+  offset += centralDirectory.length;
+
+  const endRecord = [];
+  writeUint32(endRecord, 0x06054b50);
+  writeUint16(endRecord, 0);
+  writeUint16(endRecord, 0);
+  writeUint16(endRecord, files.length);
+  writeUint16(endRecord, files.length);
+  writeUint32(endRecord, centralDirectory.length);
+  writeUint32(endRecord, centralDirectoryOffset);
+  writeUint16(endRecord, 0);
+  output.push(...endRecord);
+
+  return new Uint8Array(output);
+}
+
+function escapeXml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function columnName(index) {
+  let name = '';
+  let value = index + 1;
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    name = String.fromCharCode(65 + remainder) + name;
+    value = Math.floor((value - 1) / 26);
+  }
+  return name;
+}
+
+function worksheetXml(rows) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    ${rows.map((row, rowIndex) => `<row r="${rowIndex + 1}">${row.map((cell, columnIndex) => {
+      const reference = `${columnName(columnIndex)}${rowIndex + 1}`;
+      return `<c r="${reference}" t="inlineStr"><is><t>${escapeXml(cell)}</t></is></c>`;
+    }).join('')}</row>`).join('')}
+  </sheetData>
+</worksheet>`;
+}
+
+function workbookFiles(sheets) {
+  return [
+    {
+      name: '[Content_Types].xml',
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  ${sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}
+</Types>`,
+    },
+    {
+      name: '_rels/.rels',
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`,
+    },
+    {
+      name: 'xl/workbook.xml',
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    ${sheets.map((sheet, index) => `<sheet name="${escapeXml(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join('')}
+  </sheets>
+</workbook>`,
+    },
+    {
+      name: 'xl/_rels/workbook.xml.rels',
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  ${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join('')}
+</Relationships>`,
+    },
+    ...sheets.map((sheet, index) => ({
+      name: `xl/worksheets/sheet${index + 1}.xml`,
+      content: worksheetXml(sheet.rows),
+    })),
+  ];
+}
+
+function xlsxBlobForStructureJson(json) {
+  const structure = JSON.parse(json);
+  const files = workbookFiles([
+    { name: 'RDF JSON', rows: jsonRowsForStructureJson(json) },
+    { name: 'Fields', rows: fieldRowsForStructure(structure) },
+    { name: 'Classes', rows: classRowsForStructure(structure) },
+    { name: 'Class properties', rows: classPropertyRowsForStructure(structure) },
+  ]);
+  return new Blob([zipFiles(files)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function readUint16(bytes, offset) {
+  return bytes[offset] | (bytes[offset + 1] << 8);
+}
+
+function readUint32(bytes, offset) {
+  return (bytes[offset]
+    | (bytes[offset + 1] << 8)
+    | (bytes[offset + 2] << 16)
+    | (bytes[offset + 3] << 24)) >>> 0;
+}
+
+async function inflateZipEntry(bytes) {
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('Compressed XLSX files are not supported in this browser.');
+  }
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function unzipXlsxFiles(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  const decoder = new TextDecoder();
+  const files = new Map();
+  let offset = 0;
+
+  while (offset + 30 <= bytes.length && readUint32(bytes, offset) === 0x04034b50) {
+    const compressionMethod = readUint16(bytes, offset + 8);
+    const compressedSize = readUint32(bytes, offset + 18);
+    const fileNameLength = readUint16(bytes, offset + 26);
+    const extraLength = readUint16(bytes, offset + 28);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + fileNameLength + extraLength;
+    const dataEnd = dataStart + compressedSize;
+    const name = decoder.decode(bytes.slice(nameStart, nameStart + fileNameLength)).replace(/\\/g, '/');
+    const compressedBytes = bytes.slice(dataStart, dataEnd);
+    let fileBytes;
+
+    if (compressionMethod === 0) {
+      fileBytes = compressedBytes;
+    } else if (compressionMethod === 8) {
+      fileBytes = await inflateZipEntry(compressedBytes);
+    } else {
+      throw new Error(`Unsupported XLSX compression method: ${compressionMethod}.`);
+    }
+
+    files.set(name, decoder.decode(fileBytes));
+    offset = dataEnd;
+  }
+
+  return files;
+}
+
+function workbookSheetMap(files) {
+  const workbook = new DOMParser().parseFromString(files.get('xl/workbook.xml') || '', 'application/xml');
+  const relationships = new DOMParser().parseFromString(files.get('xl/_rels/workbook.xml.rels') || '', 'application/xml');
+  const targetsById = new Map(Array.from(relationships.getElementsByTagNameNS('*', 'Relationship')).map(relationship => [
+    relationship.getAttribute('Id'),
+    relationship.getAttribute('Target') || '',
+  ]));
+
+  return new Map(Array.from(workbook.getElementsByTagNameNS('*', 'sheet')).map(sheet => {
+    const target = targetsById.get(sheet.getAttribute('r:id')) || '';
+    const path = target.startsWith('xl/') ? target : `xl/${target.replace(/^\//, '')}`;
+    return [sheet.getAttribute('name'), path];
+  }));
+}
+
+function sharedStringsFromFiles(files) {
+  const sharedStringsXml = files.get('xl/sharedStrings.xml');
+  if (!sharedStringsXml) return [];
+  const sharedStrings = new DOMParser().parseFromString(sharedStringsXml, 'application/xml');
+  return Array.from(sharedStrings.getElementsByTagNameNS('*', 'si')).map(item => item.textContent || '');
+}
+
+function columnIndexFromReference(reference) {
+  const letters = String(reference || '').match(/^[A-Z]+/i)?.[0] || '';
+  return [...letters.toUpperCase()].reduce((index, letter) => (index * 26) + letter.charCodeAt(0) - 64, 0) - 1;
+}
+
+function rowsFromWorksheetXml(xml, sharedStrings = []) {
+  const worksheet = new DOMParser().parseFromString(xml || '', 'application/xml');
+  return Array.from(worksheet.getElementsByTagNameNS('*', 'row')).map(row => (
+    Array.from(row.getElementsByTagNameNS('*', 'c')).reduce((cells, cell) => {
+      const columnIndex = Math.max(0, columnIndexFromReference(cell.getAttribute('r')));
+      const rawValue = cell.textContent || '';
+      cells[columnIndex] = cell.getAttribute('t') === 's'
+        ? sharedStrings[Number(rawValue)] || ''
+        : rawValue;
+      return cells;
+    }, [])
+  ).map(row => row.map(value => value ?? '')));
+}
+
+function headerIndexes(headerRow = []) {
+  return Object.fromEntries(headerRow.map((header, index) => [
+    String(header || '').trim().toLowerCase(),
+    index,
+  ]));
+}
+
+function cellByHeader(row, headers, header) {
+  const index = headers[String(header).toLowerCase()];
+  return index === undefined ? '' : String(row[index] ?? '').trim();
+}
+
+function truthyCell(value) {
+  return ['yes', 'true', '1', 'y'].includes(String(value || '').trim().toLowerCase());
+}
+
+function optionsFromCell(value) {
+  return String(value || '')
+    .split(';')
+    .map(option => option.trim())
+    .filter(Boolean);
+}
+
+function rowForSpreadsheetField(row, headers) {
+  const kind = cellByHeader(row, headers, 'Value mode') || 'scalar';
+  const field = {
+    name: '',
+    kind,
+    label: cellByHeader(row, headers, 'Label'),
+    predicate: cellByHeader(row, headers, 'Predicate'),
+    inputType: cellByHeader(row, headers, 'Input type'),
+    datatype: cellByHeader(row, headers, 'Datatype'),
+    required: truthyCell(cellByHeader(row, headers, 'Required')),
+    allowMultiple: truthyCell(cellByHeader(row, headers, 'Multiple')),
+    targetEntityType: cellByHeader(row, headers, 'Target entity type'),
+  };
+
+  Object.keys(field).forEach(key => {
+    if (field[key] === '' || field[key] === false) delete field[key];
+  });
+
+  if (kind === 'conditional') {
+    field.inputType = 'select';
+    field.options = optionsFromCell(cellByHeader(row, headers, 'Options')).map(optionName => ({
+      name: optionName,
+      label: optionName,
+      value: classForOption(optionName),
+      subfields: [],
+    }));
+  }
+
+  if (kind === 'group' || kind === 'importClass') {
+    field.subfields = [];
+    if (kind === 'importClass') field.inputType = 'import-class';
+  }
+
+  return withDefaultDatatype(field);
+}
+
+function ensureEntitySpreadsheetRows(rowsByEntity, entityType) {
+  if (!rowsByEntity.has(entityType)) rowsByEntity.set(entityType, []);
+  return rowsByEntity.get(entityType);
+}
+
+function rowsByEntityFromFieldSheet(rows) {
+  const headers = headerIndexes(rows[0] || []);
+  const rowsByEntity = new Map();
+  const topRowsByEntity = new Map();
+
+  rows.slice(1).forEach(row => {
+    const entityType = cellByHeader(row, headers, 'Entity type');
+    const fieldPath = cellByHeader(row, headers, 'Field path');
+    if (!entityType || !fieldPath) return;
+
+    const pathParts = fieldPath.split('.').map(part => part.trim()).filter(Boolean);
+    const fieldRows = ensureEntitySpreadsheetRows(rowsByEntity, entityType);
+    if (pathParts.length === 1) {
+      const fieldRow = rowForSpreadsheetField(row, headers);
+      fieldRow.name = pathParts[0];
+      fieldRows.push(fieldRow);
+      if (!topRowsByEntity.has(entityType)) topRowsByEntity.set(entityType, new Map());
+      topRowsByEntity.get(entityType).set(fieldRow.name, fieldRow);
+      return;
+    }
+
+    const parent = topRowsByEntity.get(entityType)?.get(pathParts[0]);
+    if (!parent) return;
+    const subfield = rowForSpreadsheetField(row, headers);
+    subfield.name = pathParts[pathParts.length - 1];
+
+    if (parent.kind === 'conditional' && pathParts.length >= 3) {
+      const optionName = pathParts[1];
+      let option = (parent.options || []).find(candidate => candidate.name === optionName);
+      if (!option) {
+        option = { name: optionName, label: optionName, value: classForOption(optionName), subfields: [] };
+        parent.options = [...(parent.options || []), option];
+      }
+      option.subfields = [...(option.subfields || []), subfield];
+    } else if (parent.kind === 'group' || parent.kind === 'importClass') {
+      parent.subfields = [...(parent.subfields || []), subfield];
+      if (parent.kind === 'importClass') {
+        parent.importedFields = [...(parent.importedFields || []), subfield.name];
+      }
+    }
+  });
+
+  return rowsByEntity;
+}
+
+function applyClassSheet(structure, rows) {
+  const headers = headerIndexes(rows[0] || []);
+  const classes = {};
+  const uriTemplates = {};
+  const nextStructure = { ...structure };
+
+  rows.slice(1).forEach(row => {
+    const entityType = cellByHeader(row, headers, 'Entity type');
+    if (!entityType) return;
+    classes[entityType] = cellByHeader(row, headers, 'Class IRI') || classForEntity(entityType);
+    uriTemplates[entityType] = cellByHeader(row, headers, 'URI template') || uriTemplateForEntity(entityType);
+    nextStructure[entityType] = {
+      ...(nextStructure[entityType] || {}),
+      idField: cellByHeader(row, headers, 'ID field') || nextStructure[entityType]?.idField || 'id',
+    };
+  });
+
+  return {
+    ...nextStructure,
+    classes,
+    uriTemplates,
+  };
+}
+
+function applyFieldSheet(structure, rows) {
+  const rowsByEntity = rowsByEntityFromFieldSheet(rows);
+  let nextStructure = { ...structure };
+
+  rowsByEntity.forEach((fieldRows, entityType) => {
+    const entity = nextStructure[entityType] || {};
+    const generatedAndMetadata = Object.fromEntries(
+      rowsFromFields(entity.fields)
+        .filter(row => row.generated || row.metadataOnly)
+        .map(row => [row.name, omitKeys(row, ['name', 'kind', 'isNew'])])
+    );
+    nextStructure = {
+      ...nextStructure,
+      [entityType]: {
+        ...omitKeys(entity, ['arrays', 'nested', 'fieldOrder', 'selectedItems']),
+        fields: {
+          ...generatedAndMetadata,
+          ...fieldsFromRows(fieldRows),
+        },
+      },
+    };
+  });
+
+  return nextStructure;
+}
+
+function applyClassPropertySheet(structure, rows) {
+  const headers = headerIndexes(rows[0] || []);
+  const equivalentClasses = {};
+  const classProperties = [];
+
+  rows.slice(1).forEach(row => {
+    const source = cellByHeader(row, headers, 'Source');
+    const predicate = cellByHeader(row, headers, 'Predicate');
+    const target = cellByHeader(row, headers, 'Target');
+    const targetClassIri = cellByHeader(row, headers, 'Target class IRI');
+    const definedIn = cellByHeader(row, headers, 'Defined in');
+    if (!source || !predicate || (!target && !targetClassIri)) return;
+    const object = target || targetClassIri;
+
+    if (definedIn === 'equivalentClasses' && predicate === 'owl:equivalentClass') {
+      equivalentClasses[source] = [
+        ...(equivalentClasses[source] || []),
+        object,
+      ];
+    } else {
+      classProperties.push({ subject: source, predicate, object });
+    }
+  });
+
+  return {
+    ...structure,
+    equivalentClasses,
+    classProperties,
+  };
+}
+
+async function structureJsonFromXlsx(file) {
+  const files = await unzipXlsxFiles(await file.arrayBuffer());
+  const sheets = workbookSheetMap(files);
+  const sharedStrings = sharedStringsFromFiles(files);
+  const jsonSheetPath = sheets.get('RDF JSON');
+  const jsonRows = jsonSheetPath ? rowsFromWorksheetXml(files.get(jsonSheetPath), sharedStrings) : [];
+  const embeddedJson = jsonRows.slice(1).map(row => row[0] || '').join('');
+  let structure = embeddedJson ? JSON.parse(embeddedJson) : { classes: {}, uriTemplates: {}, classProperties: [] };
+
+  const classSheetPath = sheets.get('Classes');
+  if (classSheetPath) structure = applyClassSheet(structure, rowsFromWorksheetXml(files.get(classSheetPath), sharedStrings));
+
+  const fieldSheetPath = sheets.get('Fields');
+  if (fieldSheetPath) structure = applyFieldSheet(structure, rowsFromWorksheetXml(files.get(fieldSheetPath), sharedStrings));
+
+  const classPropertySheetPath = sheets.get('Class properties');
+  if (classPropertySheetPath) {
+    structure = applyClassPropertySheet(structure, rowsFromWorksheetXml(files.get(classPropertySheetPath), sharedStrings));
+  }
+
+  return JSON.stringify(refreshImportedClassFieldsInStructure(applyDefaultDatatypesToStructure(structure)), null, 2);
 }
 
 const columnHelp = {
@@ -151,8 +777,9 @@ function HelpHeader({ children, help }) {
     </strong>
   );
 }
-
 function applyInputTypeDefaults(row, inputType) {
+  // Changing input type also updates datatype/object behavior to a sensible
+  // default for that control.
   const nextRow = {
     ...row,
     inputType,
@@ -217,6 +844,8 @@ function uniqueName(baseName, existingNames) {
 }
 
 function rowsFromFields(fields, editableFieldNames = []) {
+  // The editor works with ordered rows, while persisted structures are keyed
+  // objects. This converts saved fields into editable table rows.
   const editableNames = new Set(editableFieldNames);
   return Object.entries(fields || {})
     .map(([name, field]) => rowFromStructureField(name, field, { isNew: editableNames.has(name) }));
@@ -475,6 +1104,8 @@ function labelFieldForEntity(structure, entityType) {
 }
 
 function linkedFieldDefaults(structure, row, targetEntityType = row.targetEntityType) {
+  // Linked scalar fields need enough target metadata to create/reference another
+  // RDF entity from a user-entered label or URI.
   if (!targetEntityType) {
       return {
         objectType: 'uri',
@@ -605,6 +1236,8 @@ function importedSubfieldFromEntry(entry) {
 }
 
 function importClassRowDefaults(structure, row, targetEntityType = row.targetEntityType, selectedKeys = null) {
+  // Imported classes copy selected fields from another entity type into a nested
+  // group, preserving the source class/predicate relationship.
   const entries = importableFieldEntriesForEntity(structure, targetEntityType);
   const selectedFieldSet = new Set(selectedKeys || entries.map(entry => entry.key));
   const selectedEntries = entries.filter(entry => (
@@ -736,6 +1369,7 @@ function omitKeys(value, keys) {
 }
 
 function persistFieldFromRow(row) {
+  // Strip editor-only row fields before saving the structure back to JSON.
   const field = omitKeys(row, ['name', 'kind', 'isNew', 'subfields', 'variable', 'options', 'previousPredicates', 'direction', 'importedFields']);
   if (isLinkedField(row)) {
     field.objectType = 'uri';
@@ -824,6 +1458,8 @@ function persistStructuredFieldFromRow(row) {
 }
 
 function fieldsFromRows(rows) {
+  // Convert ordered editor rows back into the keyed field object expected by the
+  // backend RDF config.
   return Object.fromEntries(
     rows
       .filter(row => ['scalar', 'conditional', 'array', 'group', 'importClass'].includes(row.kind) && row.name && row.predicate)
@@ -976,6 +1612,8 @@ function refreshImportedClassFieldsInStructure(structure) {
 }
 
 function SuggestionInput({ value, disabled, onChange, placeholder, listId, options = [], ariaLabel }) {
+  // Datalist-backed input keeps free typing while suggesting known predicates,
+  // classes, datatypes, and field names.
   const inputRef = useRef(null);
   const [isOpen, setIsOpen] = useState(false);
   const hasOptions = options.length > 0;
@@ -1055,6 +1693,7 @@ function DatatypeInput({ value, disabled, onChange, placeholder = 'xsd:date' }) 
 }
 
 function FieldTable({ title, rows, onChange, onAdd, onRemove }) {
+  // Simple field tables are used for the fixed report/report-item structures.
   const [dragIndex, setDragIndex] = useState(null);
 
   const updateRow = (index, key, value) => {
@@ -1143,6 +1782,8 @@ function ClassSidebar({
   onAdd,
   onDelete,
 }) {
+  // The sidebar manages custom classes, their URI templates, and class-to-class
+  // relationship toggles.
   const [draftNames, setDraftNames] = useState({});
   const editableNames = new Set(editableClassNames);
   const rows = Object.keys({ ...classes, ...uriTemplates });
@@ -1262,10 +1903,15 @@ function ClassSidebar({
 }
 
 function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChange, onAdd, onRemove }) {
+  // Custom classes can mix scalar fields, linked entity fields, imported class
+  // groups, and nested group fields in one editable table.
   const [dragIndex, setDragIndex] = useState(null);
+  const [selectedFieldIndex, setSelectedFieldIndex] = useState(0);
   const [collapsedSections, setCollapsedSections] = useState({});
   const linkableEntityTypes = Object.keys(structure?.classes || {}).filter(entityType => entityType !== selectedEntityType);
   const showLinkToClassControls = false;
+  const selectedIndex = rows[selectedFieldIndex] ? selectedFieldIndex : 0;
+  const selectedRow = rows[selectedIndex] || null;
 
   const sectionKey = (row, index, suffix) => `${row.name || `field-${index}`}-${suffix}`;
   const toggleSection = (key) => {
@@ -1615,6 +2261,7 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
   const dropRow = (index) => {
     if (dragIndex === null) return;
     onChange(moveRow(rows, dragIndex, index));
+    setSelectedFieldIndex(index);
     setDragIndex(null);
   };
 
@@ -1896,6 +2543,140 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
     );
   };
 
+  if (selectedRow) {
+    const row = selectedRow;
+    const index = selectedIndex;
+    return (
+      <div className="rdf-editor-section">
+        <div className="rdf-editor-heading"><h3>{title}</h3></div>
+        <div className="rdf-field-options-layout">
+          <section className="rdf-fields-pane">
+            <div className="rdf-pane-heading"><h4>Fields</h4><button type="button" onClick={() => { onAdd(); setSelectedFieldIndex(rows.length); }} className="secondary-btn rdf-add-field-button">+ Add Field</button></div>
+            <div className="rdf-field-card-list">
+              {rows.map((candidate, candidateIndex) => (
+                <button key={`${candidate.isNew ? 'new-field' : candidate.name}-${candidateIndex}`} type="button" className={`rdf-field-card${candidateIndex === selectedIndex ? ' selected' : ''}`} onClick={() => setSelectedFieldIndex(candidateIndex)} onDragOver={(event) => event.preventDefault()} onDrop={() => dropRow(candidateIndex)}>
+                  <span className="drag-handle" draggable onDragStart={() => setDragIndex(candidateIndex)} onDragEnd={() => setDragIndex(null)} aria-label="Drag to reorder" title="Drag to reorder"><span className="drag-icon" aria-hidden="true">::</span></span>
+                  <span><strong>{candidate.label || candidate.name}</strong><small>{candidate.kind || 'scalar'}</small></span>
+                </button>
+              ))}
+            </div>
+          </section>
+          <section className="rdf-field-options-pane">
+            <div className="rdf-pane-heading"><h4>Field options</h4><button type="button" className="delete-btn" onClick={() => onRemove(index)}>Remove</button></div>
+            <div className="rdf-field-options-form">
+              <label><HelpHeader help={columnHelp.label}>Label</HelpHeader><input value={row.label || ''} onChange={(event) => updateRow(index, 'label', event.target.value)} /></label>
+              <label><HelpHeader help={columnHelp.valueMode}>Value mode</HelpHeader><select value={row.kind || 'scalar'} onChange={(event) => updateRow(index, 'kind', event.target.value)}><option value="scalar">Single value</option><option value="array">Multiple values</option><option value="group">Subfields</option><option value="importClass">Import class</option><option value="conditional">Conditional subfields</option></select></label>
+              <label><HelpHeader help={columnHelp.predicate}>Predicate</HelpHeader><input value={row.predicate || ''} onChange={(event) => updateRow(index, 'predicate', event.target.value)} /></label>
+              <label><HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader><DatatypeInput value={datatypeDisplayValue(row)} onChange={(value) => updateRow(index, 'datatype', value)} disabled={datatypeIsLocked(row)} /></label>
+              <label><HelpHeader help={columnHelp.input}>Input</HelpHeader><select value={row.inputType || (row.kind === 'array' ? 'text-list' : 'text')} onChange={(event) => updateRow(index, 'inputType', event.target.value)} disabled={isLinkedField(row) || row.kind === 'group' || row.kind === 'importClass' || row.kind === 'conditional'}>{row.kind === 'array' ? <><option value="text-list">Text list</option><option value="uri-list">URI list</option></> : row.kind === 'conditional' ? <option value="select">Subfields</option> : row.kind === 'importClass' ? <option value="import-class">Imported fields</option> : row.kind === 'group' ? <option value="text">Subfields</option> : <><option value="text">Text</option><option value="uri">URI</option><option value="textarea">Textarea</option><option value="date">Date</option><option value="number">Number</option><option value="datetime">Date/time</option></>}</select></label>
+              <label className="rdf-option-toggle"><input type="checkbox" checked={!!row.required} onChange={(event) => updateRow(index, 'required', event.target.checked)} />Required</label>
+              <label className="rdf-option-toggle"><input type="checkbox" checked={!!row.encrypted} onChange={(event) => updateRow(index, 'encrypted', event.target.checked)} />Encrypt</label>
+            </div>
+            {row.kind === 'importClass' && (
+              <div className="rdf-subfields rdf-import-class-settings">
+                <div className="rdf-subfields-title"><span>Import class fields</span></div>
+                <div className="rdf-link-grid">
+                  <div className="rdf-link-control">
+                    <HelpHeader help={columnHelp.linkedClass}>Class</HelpHeader>
+                    <select value={row.targetEntityType || ''} onChange={(event) => updateRow(index, 'targetEntityType', event.target.value)}>
+                      <option value="">-- select --</option>
+                      {linkableEntityTypes.map(entityType => <option key={entityType} value={entityType}>{entityType}</option>)}
+                    </select>
+                  </div>
+                  <div className="rdf-link-control">
+                    <HelpHeader help={columnHelp.linkedClass}>Class value</HelpHeader>
+                    <input value={structure?.classes?.[row.targetEntityType] || ''} readOnly />
+                  </div>
+                </div>
+                {(() => {
+                  const importableFields = importableFieldEntriesForEntity(structure, row.targetEntityType);
+                  const selectedFields = new Set(row.importedFields || importableFields.map(field => field.key));
+                  return (
+                    <div className="rdf-import-field-list">
+                      {importableFields.map(field => (
+                        <label key={field.key} className="rdf-import-field-option">
+                          <input
+                            type="checkbox"
+                            checked={selectedFields.has(field.key)}
+                            onChange={(event) => {
+                              const nextFields = event.target.checked
+                                ? [...selectedFields, field.key]
+                                : [...selectedFields].filter(key => key !== field.key);
+                              updateRow(index, 'importedFields', nextFields);
+                            }}
+                          />
+                          <span>{field.label}</span>
+                          <code>{field.field?.predicate}</code>
+                        </label>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+            {row.kind === 'group' && (
+              <div className="rdf-subfields">
+                <div className="rdf-subfields-title"><span>Subfields</span></div>
+                <div className="rdf-subfield-heading">
+                  <HelpHeader help={columnHelp.label}>Label</HelpHeader>
+                  <HelpHeader help={columnHelp.valueMode}>Value Mode</HelpHeader>
+                  <HelpHeader help={columnHelp.predicate}>Predicate</HelpHeader>
+                  <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
+                  <HelpHeader help={columnHelp.input}>Input</HelpHeader>
+                  <HelpHeader help={columnHelp.encrypted}>Encrypt</HelpHeader>
+                  <ActionHeaderSpacer />
+                </div>
+                {(row.subfields || []).map((subfield, subfieldIndex) => renderSubfieldEditor(
+                  subfield,
+                  subfieldIndex,
+                  (key, value) => updateSubfield(index, subfieldIndex, key, value),
+                  () => removeSubfield(index, subfieldIndex),
+                  'group-subfield'
+                ))}
+                <button type="button" className="secondary-btn" onClick={() => addSubfield(index)}>+ Add Subfield</button>
+              </div>
+            )}
+            {row.kind === 'conditional' && (
+              <div className="rdf-subfields rdf-conditional-options">
+                <div className="rdf-subfields-title"><span>Options</span></div>
+                {(row.options || []).map((option, optionIndex) => (
+                  <div key={`${option.isNew || row.isNew ? 'new-option' : option.name}-${optionIndex}`} className="rdf-option-block">
+                    <label>
+                      <HelpHeader help={columnHelp.label}>Label</HelpHeader>
+                      <input value={option.label || ''} onChange={(event) => updateOption(index, optionIndex, 'label', event.target.value)} />
+                    </label>
+                    <label>
+                      <HelpHeader help={columnHelp.optionValue}>URI value</HelpHeader>
+                      <input value={option.value || ''} onChange={(event) => updateOption(index, optionIndex, 'value', event.target.value)} />
+                    </label>
+                    <button type="button" className="delete-btn" onClick={() => removeOption(index, optionIndex)}>Remove Option</button>
+                    <div className="rdf-subfield-heading">
+                      <HelpHeader help={columnHelp.label}>Label</HelpHeader>
+                      <HelpHeader help={columnHelp.valueMode}>Value Mode</HelpHeader>
+                      <HelpHeader help={columnHelp.predicate}>Predicate</HelpHeader>
+                      <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
+                      <HelpHeader help={columnHelp.input}>Input</HelpHeader>
+                      <HelpHeader help={columnHelp.encrypted}>Encrypt</HelpHeader>
+                      <ActionHeaderSpacer />
+                    </div>
+                    {(option.subfields || []).map((subfield, subfieldIndex) => renderSubfieldEditor(
+                      subfield,
+                      subfieldIndex,
+                      (key, value) => updateOptionSubfield(index, optionIndex, subfieldIndex, key, value),
+                      () => removeOptionSubfield(index, optionIndex, subfieldIndex),
+                      'option-subfield'
+                    ))}
+                    <button type="button" className="secondary-btn" onClick={() => addOptionSubfield(index, optionIndex)}>+ Add Subfield</button>
+                  </div>
+                ))}
+                <button type="button" className="secondary-btn" onClick={() => addOption(index)}>+ Add Option</button>
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="rdf-editor-section">
       <div className="rdf-editor-heading">
@@ -2201,6 +2982,8 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
 }
 
 function ClassPropertiesPane({ structure, selectedEntityType, entityTypes, onChange }) {
+  // Class properties model ontology-level relationships such as equivalentClass
+  // without tying them to a single data entry form field.
   if (!selectedEntityType) {
     return (
       <div className="rdf-empty-field-pane">
@@ -2311,6 +3094,8 @@ function ClassPropertiesPane({ structure, selectedEntityType, entityTypes, onCha
 }
 
 function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, activeOrganisationIsUnscoped }) {
+  // This page is a full JSON/RDF structure editor: it loads the active structure,
+  // lets users edit it as guided tables or raw JSON, and saves through GraphQL.
   const { user } = useAuth();
   const { data, loading, error, refetch } = useQuery(GET_RDF_STRUCTURE, {
     variables: { organisationId: activeOrganisationId },
@@ -2577,6 +3362,10 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
     downloadJsonFile(`${safeFilename(preset.name, 'rdf-preset')}.json`, preset.json);
   };
 
+  const handleDownloadPresetXlsx = (preset) => {
+    downloadBlob(`${safeFilename(preset.name, 'rdf-preset')}.xlsx`, xlsxBlobForStructureJson(preset.json));
+  };
+
   const handleDeletePreset = async (preset) => {
     if (!preset.canDelete) return;
     const confirmed = window.confirm(`Delete "${preset.name}"?\n\nThis cannot be undone.`);
@@ -2618,7 +3407,9 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
     if (!file || !canWriteStructure) return;
     try {
       setMessage('');
-      await importStructureJson(await file.text());
+      const isXlsx = file.name.toLowerCase().endsWith('.xlsx')
+        || file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      await importStructureJson(isXlsx ? await structureJsonFromXlsx(file) : await file.text());
     } catch (err) {
       setMessage(`Error: ${err.message}`);
     }
@@ -2641,7 +3432,10 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
             </div>
             <div className="rdf-preset-actions">
               <button type="button" onClick={() => handleDownloadPreset(preset)}>
-                Download
+                JSON
+              </button>
+              <button type="button" onClick={() => handleDownloadPresetXlsx(preset)}>
+                XLSX
               </button>
               {canWriteStructure && (
                 <button type="button" onClick={() => handleLoadPreset(preset)} disabled={loadingPreset}>
@@ -2715,7 +3509,7 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="application/json,.json"
+                  accept="application/json,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx"
                   className="rdf-hidden-file-input"
                   onChange={handleImportFile}
                 />
@@ -2854,3 +3648,6 @@ export default function RdfStructure() {
     />
   );
 }
+
+
+

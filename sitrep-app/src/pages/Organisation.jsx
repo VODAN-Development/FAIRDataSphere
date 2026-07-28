@@ -18,6 +18,39 @@ const ORGANISATION_FIELDS = gql`
     joinRequiresPassword
     joinPassword
     currentUserRole
+    currentUserPermissions {
+      appRead
+      appWrite
+      manageOrganisation
+      manageRoles
+      promoteGuests
+      viewMemberCredentials
+      viewOwnerCredentials
+      viewJoinPassword
+      allegroRead
+      allegroWrite
+      allegroQueryLimit
+    }
+    roles {
+      id
+      name
+      builtIn
+      repositoryUsername
+      repositoryPassword
+      permissions {
+        appRead
+        appWrite
+        manageOrganisation
+        manageRoles
+        promoteGuests
+        viewMemberCredentials
+        viewOwnerCredentials
+        viewJoinPassword
+        allegroRead
+        allegroWrite
+        allegroQueryLimit
+      }
+    }
     members {
       role
       joinedAt
@@ -78,6 +111,15 @@ const UPDATE_MEMBER_ROLE = gql`
   }
 `;
 
+const UPSERT_ORGANISATION_ROLE = gql`
+  ${ORGANISATION_FIELDS}
+  mutation UpsertOrganisationRole($organisationId: ID!, $id: ID, $name: String!, $permissions: OrganisationRolePermissionsInput!) {
+    upsertOrganisationRole(organisationId: $organisationId, id: $id, name: $name, permissions: $permissions) {
+      ...OrganisationFields
+    }
+  }
+`;
+
 const DELETE_ORGANISATION = gql`
   mutation DeleteOrganisation($id: ID!) {
     deleteOrganisation(id: $id)
@@ -92,8 +134,27 @@ const LEAVE_ORGANISATION = gql`
 
 const EMPTY_ORGANISATIONS = [];
 const ACTIVE_ORGANISATION_KEY = 'sitrep.activeOrganisationId';
+const ROLE_PERMISSION_FIELDS = [
+  ['appRead', 'View app data'],
+  ['appWrite', 'Create and edit app data'],
+  ['manageOrganisation', 'Manage organisation settings'],
+  ['manageRoles', 'Manage roles and members'],
+  ['promoteGuests', 'Promote guests to members'],
+  ['viewMemberCredentials', 'View read credentials'],
+  ['viewOwnerCredentials', 'View write credentials'],
+  ['viewJoinPassword', 'View join password'],
+  ['allegroRead', 'AllegroGraph read user'],
+  ['allegroWrite', 'AllegroGraph write user'],
+  ['allegroQueryLimit', 'Limit AllegroGraph queries to 1000 results'],
+];
+
+function permissionInput(permissions = {}) {
+  return Object.fromEntries(ROLE_PERMISSION_FIELDS.map(([key]) => [key, !!permissions[key]]));
+}
 
 function OrganisationSettings({ organisation, onSave, saving }) {
+  // Local form state lets owners edit organisation metadata before saving it to
+  // the backend.
   const [name, setName] = useState(organisation.name);
   const [description, setDescription] = useState(organisation.description || '');
   const [joinRequiresPassword, setJoinRequiresPassword] = useState(organisation.joinRequiresPassword);
@@ -129,7 +190,96 @@ function OrganisationSettings({ organisation, onSave, saving }) {
   );
 }
 
+function RoleEditor({ role, canManageRoles, onSave, saving }) {
+  const [name, setName] = useState(role.name);
+  const [permissions, setPermissions] = useState(role.permissions);
+
+  function handleSubmit(event) {
+    event.preventDefault();
+    onSave(role.id, name, permissions);
+  }
+
+  function setPermission(key, value) {
+    setPermissions(current => ({
+      ...current,
+      [key]: value,
+      ...(key === 'allegroWrite' && value ? { allegroRead: true } : {}),
+      ...(key === 'appWrite' && value ? { appRead: true } : {}),
+    }));
+  }
+
+  return (
+    <form className="organisation-role-editor" onSubmit={handleSubmit}>
+      <div className="organisation-role-editor-header">
+        <label className="form-group">
+          Role name
+          <input
+            value={name}
+            disabled={!canManageRoles || role.builtIn}
+            onChange={event => setName(event.target.value)}
+            required
+          />
+        </label>
+        <span className={`organisation-role ${role.id}`}>{role.id}</span>
+      </div>
+
+      <div className="organisation-permission-grid">
+        {ROLE_PERMISSION_FIELDS.map(([key, label]) => (
+          <label className="organisation-permission-toggle" key={key}>
+            <input
+              type="checkbox"
+              checked={!!permissions[key]}
+              disabled={!canManageRoles || (role.id === 'owner' && [
+                'appRead',
+                'appWrite',
+                'manageOrganisation',
+                'manageRoles',
+                'viewOwnerCredentials',
+                'allegroRead',
+                'allegroWrite',
+                'allegroQueryLimit',
+              ].includes(key))}
+              onChange={event => setPermission(key, event.target.checked)}
+            />
+            {label}
+          </label>
+        ))}
+      </div>
+
+      <div className="organisation-repository compact">
+        <h4>AllegroGraph role user</h4>
+        <dl>
+          <div>
+            <dt>Username</dt>
+            <dd>{role.repositoryUsername || '-'}</dd>
+          </div>
+          <div>
+            <dt>Password</dt>
+            <dd>{role.repositoryPassword || '-'}</dd>
+          </div>
+          <div>
+            <dt>Web view</dt>
+            <dd>
+              <a href="https://agraph.fairdatasphere.com" target="_blank" rel="noreferrer">
+                agraph.fairdatasphere.com
+              </a>
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      {canManageRoles && (
+        <button type="submit" disabled={saving}>
+          {saving ? 'Saving...' : 'Save role'}
+        </button>
+      )}
+    </form>
+  );
+}
+
 export default function Organisation() {
+  // Organisation handles creation, joining, member role management, repository
+  // credential visibility, and active organisation selection.
   const { user } = useAuth();
   const { data, loading, error } = useQuery(GET_ORGANISATIONS);
   const [activePanel, setActivePanel] = useState('profile');
@@ -138,6 +288,8 @@ export default function Organisation() {
   const [newDescription, setNewDescription] = useState('');
   const [joinSearch, setJoinSearch] = useState('');
   const [joinPasswords, setJoinPasswords] = useState({});
+  const [selectedRoleId, setSelectedRoleId] = useState('owner');
+  const [newRoleName, setNewRoleName] = useState('');
   const [message, setMessage] = useState('');
   const [formError, setFormError] = useState('');
   const [createOrganisation, { loading: creating }] = useMutation(CREATE_ORGANISATION, {
@@ -150,6 +302,9 @@ export default function Organisation() {
     refetchQueries: ['GetOrganisations'],
   });
   const [updateMemberRole, { loading: savingRole }] = useMutation(UPDATE_MEMBER_ROLE, {
+    refetchQueries: ['GetOrganisations'],
+  });
+  const [upsertOrganisationRole, { loading: savingRoleDefinition }] = useMutation(UPSERT_ORGANISATION_ROLE, {
     refetchQueries: ['GetOrganisations'],
   });
   const [deleteOrganisation, { loading: deletingOrganisation }] = useMutation(DELETE_ORGANISATION, {
@@ -174,33 +329,31 @@ export default function Organisation() {
     || managedOrganisations[0]
     || null;
   const isOwner = selectedOrganisation
-    ? user?.role === 'admin' || selectedOrganisation.currentUserRole === 'owner'
+    ? user?.role === 'admin' || !!selectedOrganisation.currentUserPermissions?.manageOrganisation
     : false;
-  const isMember = selectedOrganisation
-    ? isOwner || selectedOrganisation.currentUserRole === 'member'
+  const canManageRoles = selectedOrganisation
+    ? user?.role === 'admin' || !!selectedOrganisation.currentUserPermissions?.manageRoles
     : false;
-  const canViewJoinPassword = selectedOrganisation?.currentUserRole === 'owner';
-  const canViewOwnerRepositoryCredentials = user?.role === 'admin'
-    || selectedOrganisation?.currentUserRole === 'owner';
   const ownerCount = selectedOrganisation?.members.filter(member => member.role === 'owner').length || 0;
   const canDelete = selectedOrganisation
     ? user?.role === 'admin'
       || (selectedOrganisation.currentUserRole === 'owner' && ownerCount === 1)
     : false;
   const canLeave = selectedOrganisation
-    ? selectedOrganisation.currentUserRole === 'guest'
-      || selectedOrganisation.currentUserRole === 'member'
-      || (selectedOrganisation.currentUserRole === 'owner' && ownerCount > 1)
+    ? selectedOrganisation.currentUserRole !== 'owner'
+      || ownerCount > 1
     : false;
   const roleLabel = selectedOrganisation
     ? user?.role === 'admin'
       ? selectedOrganisation.currentUserRole || 'admin'
       : selectedOrganisation.currentUserRole
     : '';
+  const selectedRole = selectedOrganisation?.roles.find(role => role.id === selectedRoleId)
+    || selectedOrganisation?.roles[0]
+    || null;
   const panelOptions = [
     { id: 'profile', label: 'Profile' },
     { id: 'role', label: 'Roles' },
-    { id: 'password', label: 'Credentials' },
     { id: 'danger', label: 'Danger' },
   ];
 
@@ -250,6 +403,60 @@ export default function Organisation() {
     try {
       await updateMemberRole({ variables: { organisationId, userId: memberUserId, role } });
       setMessage('Role updated.');
+    } catch (submissionError) {
+      setFormError(submissionError.message);
+    }
+  }
+
+  async function handleRoleSave(roleId, name, permissions) {
+    setMessage('');
+    setFormError('');
+
+    try {
+      await upsertOrganisationRole({
+        variables: {
+          organisationId: selectedOrganisation.id,
+          id: roleId,
+          name,
+          permissions: permissionInput(permissions),
+        },
+      });
+      setMessage('Role permissions updated.');
+    } catch (submissionError) {
+      setFormError(submissionError.message);
+    }
+  }
+
+  async function handleCreateRole(event) {
+    event.preventDefault();
+    setMessage('');
+    setFormError('');
+
+    try {
+      const result = await upsertOrganisationRole({
+        variables: {
+          organisationId: selectedOrganisation.id,
+          id: null,
+          name: newRoleName,
+          permissions: {
+            appRead: true,
+            appWrite: false,
+            manageOrganisation: false,
+            manageRoles: false,
+            promoteGuests: false,
+            viewMemberCredentials: false,
+            viewOwnerCredentials: false,
+            viewJoinPassword: false,
+            allegroRead: false,
+            allegroWrite: false,
+            allegroQueryLimit: false,
+          },
+        },
+      });
+      const createdRole = result.data?.upsertOrganisationRole?.roles.find(role => role.name === newRoleName);
+      setSelectedRoleId(createdRole?.id || selectedRoleId);
+      setNewRoleName('');
+      setMessage('Role created.');
     } catch (submissionError) {
       setFormError(submissionError.message);
     }
@@ -360,10 +567,12 @@ export default function Organisation() {
         <div className="rdf-editor-heading">
           <h3>Roles</h3>
         </div>
-        <div className="organisation-members">
+        <div className="organisation-role-layout">
+          <div className="organisation-members">
+            <h4>Members</h4>
           {selectedOrganisation.members.map(member => {
             const canPromoteGuest = !isOwner
-              && selectedOrganisation.currentUserRole === 'member'
+              && selectedOrganisation.currentUserPermissions?.promoteGuests
               && member.role === 'guest'
               && member.user.id !== user.id;
             return (
@@ -372,15 +581,15 @@ export default function Organisation() {
                   <strong>{member.user.name || member.user.email}</strong>
                   <span>{member.user.email}</span>
                 </div>
-                {isOwner ? (
+                {canManageRoles ? (
                   <select
                     value={member.role}
                     disabled={savingRole}
                     onChange={event => handleRoleChange(selectedOrganisation.id, member.user.id, event.target.value)}
                   >
-                    <option value="owner">owner</option>
-                    <option value="member">member</option>
-                    <option value="guest">guest</option>
+                    {selectedOrganisation.roles.map(role => (
+                      <option key={role.id} value={role.id}>{role.name}</option>
+                    ))}
                   </select>
                 ) : canPromoteGuest ? (
                   <select
@@ -397,95 +606,58 @@ export default function Organisation() {
               </div>
             );
           })}
-        </div>
-      </section>
-    );
-  }
-
-  function renderPasswordPanel() {
-    if (!selectedOrganisation) {
-      return (
-        <div className="rdf-empty-field-pane">
-          <h3>No organisation selected</h3>
-          <p>Create or join an organisation to view access details.</p>
-        </div>
-      );
-    }
-
-    if (!isMember) {
-      return (
-        <div className="rdf-empty-field-pane">
-          <h3>Credentials</h3>
-          <p>Only organisation members and owners can view repository access credentials.</p>
-        </div>
-      );
-    }
-
-    return (
-      <section className="organisation-detail-section">
-        <div className="rdf-editor-heading">
-          <h3>Credentials</h3>
-        </div>
-        <div className="organisation-repository">
-          <h4>Repository access</h4>
-          <dl>
-            <div>
-              <dt>Repository</dt>
-              <dd>{selectedOrganisation.repository || 'Not provisioned yet'}</dd>
-            </div>
-            <div>
-              <dt>Web view</dt>
-              <dd>
-                <a href="https://agraph.fairdatasphere.com" target="_blank" rel="noreferrer">
-                  agraph.fairdatasphere.com
-                </a>
-              </dd>
-            </div>
-          </dl>
-        </div>
-        <div className="organisation-repository">
-          <h4>Member read-only access</h4>
-          <dl>
-            <div>
-              <dt>Username</dt>
-              <dd>{selectedOrganisation.repositoryReadUsername || '-'}</dd>
-            </div>
-            <div>
-              <dt>Password</dt>
-              <dd>{selectedOrganisation.repositoryReadPassword || '-'}</dd>
-            </div>
-          </dl>
-        </div>
-        {canViewOwnerRepositoryCredentials && (
-          <div className="organisation-repository">
-            <h4>Owner read/write access</h4>
-            <dl>
-              <div>
-                <dt>Username</dt>
-                <dd>{selectedOrganisation.repositoryUsername || '-'}</dd>
-              </div>
-              <div>
-                <dt>Password</dt>
-                <dd>{selectedOrganisation.repositoryPassword || '-'}</dd>
-              </div>
-            </dl>
           </div>
-        )}
-        {canViewJoinPassword && (
-          <div className="organisation-repository">
-            <h4>Join access</h4>
-            <dl>
-              <div>
-                <dt>Password</dt>
-                <dd>
-                  {selectedOrganisation.joinRequiresPassword
-                    ? selectedOrganisation.joinPassword || 'Private password unavailable'
-                    : 'Open to join'}
-                </dd>
-              </div>
-            </dl>
+
+          <div className="organisation-roles-pane">
+            <div className="organisation-roles-list">
+              <h4>Role permissions</h4>
+              {selectedOrganisation.roles.map(role => (
+                <button
+                  key={role.id}
+                  type="button"
+                  className={`organisation-role-card${selectedRole?.id === role.id ? ' selected' : ''}`}
+                  onClick={() => setSelectedRoleId(role.id)}
+                >
+                  <strong>{role.name}</strong>
+                  <span>
+                    {role.permissions.allegroWrite
+                      ? `AllegroGraph write${role.permissions.allegroQueryLimit ? ', 1000-result cap' : ''}`
+                      : role.permissions.allegroRead
+                        ? `AllegroGraph read${role.permissions.allegroQueryLimit ? ', 1000-result cap' : ''}`
+                        : 'App only'}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {selectedRole && (
+              <RoleEditor
+                key={`${selectedOrganisation.id}-${selectedRole.id}`}
+                role={selectedRole}
+                canManageRoles={canManageRoles}
+                onSave={handleRoleSave}
+                saving={savingRoleDefinition}
+              />
+            )}
+
+            {canManageRoles && (
+              <form className="organisation-create-role" onSubmit={handleCreateRole}>
+                <label className="form-group">
+                  New role
+                  <input
+                    value={newRoleName}
+                    onChange={event => setNewRoleName(event.target.value)}
+                    placeholder="Analyst"
+                    required
+                  />
+                </label>
+                <button type="submit" disabled={savingRoleDefinition}>
+                  Create role
+                </button>
+              </form>
+            )}
           </div>
-        )}
+        </div>
       </section>
     );
   }
@@ -614,7 +786,6 @@ export default function Organisation() {
 
   function renderActivePanel() {
     if (activePanel === 'role') return renderRolePanel();
-    if (activePanel === 'password') return renderPasswordPanel();
     if (activePanel === 'access') return renderAccessPanel();
     if (activePanel === 'danger') return renderDangerPanel();
     return renderProfilePanel();

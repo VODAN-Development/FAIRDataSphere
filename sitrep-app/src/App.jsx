@@ -18,6 +18,8 @@ function App() {
 
   return (
     <div className="App">
+      {/* Top-level navigation stays visible across pages; protected links appear
+          only after the auth provider has a current user. */}
       <header>
         <h1>FAIR Data Sphere</h1>
         <nav>
@@ -40,10 +42,12 @@ function App() {
       </header>
 
       <Routes>
+        {/* Public routes can be visited before the session check completes. */}
         <Route path="/" element={<Home />} />
         <Route path="/about" element={<About />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<SignUp />} />
+        {/* ProtectedRoute gates all data-management surfaces behind sign-in. */}
         <Route element={<ProtectedRoute />}>
           <Route path="/data-input" element={<DataInput />} />
           <Route path="/items" element={<Items />} />

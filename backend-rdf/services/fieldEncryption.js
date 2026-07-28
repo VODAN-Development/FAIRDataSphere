@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 
 const PREFIX = "enc:v1:";
 
+// FIELD_ENCRYPTION_KEY is base64-encoded in env but must decode to the 32 bytes
+// required by AES-256-GCM.
 function encryptionKey() {
   const configured = process.env.FIELD_ENCRYPTION_KEY;
   if (!configured) {
@@ -21,6 +23,8 @@ function isEncryptedValue(value) {
 }
 
 export function encryptFieldValue(value) {
+  // Empty values and already-encrypted values pass through so repeated saves are
+  // idempotent.
   if (value === null || value === undefined || value === "" || isEncryptedValue(value)) return value;
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey(), iv);
@@ -31,6 +35,7 @@ export function encryptFieldValue(value) {
 
 export function decryptFieldValue(value) {
   if (!isEncryptedValue(value)) return value;
+  // Stored payload layout is iv || authTag || ciphertext, encoded as base64url.
   const payload = Buffer.from(value.slice(PREFIX.length), "base64url");
   const iv = payload.subarray(0, 12);
   const tag = payload.subarray(12, 28);

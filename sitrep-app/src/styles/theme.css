@@ -1,3 +1,5 @@
+/* Central color tokens. Components should use these variables instead of hard
+   coded colors so the palette can be adjusted in one place. */
 :root {
   color-scheme: light;
 

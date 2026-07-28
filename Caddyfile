@@ -1,11 +1,14 @@
+# Public frontend domain serves the built React app.
 {$APP_DOMAIN} {
     reverse_proxy frontend:80
 }
 
+# API domain forwards browser GraphQL requests to the Express/Apollo backend.
 {$API_DOMAIN} {
     reverse_proxy backend:4000
 }
 
+# AllegroGraph gets its own domain for administrative access when exposed.
 {$AGRAPH_DOMAIN} {
     reverse_proxy allegrograph:10035
 }

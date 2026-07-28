@@ -166,6 +166,7 @@ const REMOVE_ITEM_FROM_REPORT = gql`
 `;
 
 function entityTitle(entity) {
+  // Prefer human-readable field values in item lists, then fall back to IDs/URIs.
   const labelValue = entity.fieldValues?.find(field =>
     field.value && ['name', 'title', 'label'].includes(field.name)
   )?.value;
@@ -174,6 +175,8 @@ function entityTitle(entity) {
 }
 
 export default function Items() {
+  // Items displays built-in report items and custom RDF entities, with dynamic
+  // edit forms generated from the active RDF structure.
   const { activeOrganisationCanWrite, activeOrganisationId, activeOrganisationIsUnscoped } = useOrganisationContext();
   const [selectedEntityType, setSelectedEntityType] = useState('');
   const [selectedReportByItem, setSelectedReportByItem] = useState({});

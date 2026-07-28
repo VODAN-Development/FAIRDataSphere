@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 import { DEFAULT_RDF } from "./defaultRdfStructure.js";
 
 const structurePath = join(dirname(fileURLToPath(import.meta.url)), "reportRdfStructure.json");
+
+// These keys describe group behavior rather than child fields, so they must be
+// skipped when walking nested group subfields.
 const GROUP_PROPERTY_NAMES = new Set([
   "label",
   "predicate",
@@ -21,6 +24,7 @@ const GROUP_PROPERTY_NAMES = new Set([
 ]);
 const LEGACY_EVENT_TYPE_OPTION_NAMES = new Set(Object.keys(DEFAULT_RDF.reportItem.fields.eventType.options || {}));
 
+// Turn prefix config into the PREFIX block shared by all generated SPARQL.
 function prefixesFromStructure(structure) {
   return Object.entries(structure.prefixes || DEFAULT_RDF.prefixes)
     .map(([prefix, iri]) => `PREFIX ${prefix}: <${iri}>`)
@@ -29,11 +33,15 @@ function prefixesFromStructure(structure) {
 
 export let PREFIXES = prefixesFromStructure(DEFAULT_RDF);
 
+// Structures are plain JSON-compatible objects, so JSON cloning is sufficient
+// and keeps mutations from leaking into DEFAULT_RDF.
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
 export function groupSubfieldEntries(group = {}) {
+  // Imported class fields can carry a preferred order; local fields fall back to
+  // their object-entry order.
   const entries = Object.entries(group || {})
     .filter(([key, field]) => !GROUP_PROPERTY_NAMES.has(key) && field && typeof field === "object" && field.predicate);
   if (!Array.isArray(group.importedFields)) return entries;
@@ -66,6 +74,8 @@ function groupFieldEntries(fields = {}) {
 }
 
 function normalizeUnifiedFields(entity = {}) {
+  // Earlier structures had separate arrays/nested buckets. Normalize them into a
+  // single fields object so the rest of the code can use one traversal path.
   const fields = { ...(entity.fields || {}) };
   Object.entries(entity.arrays || {}).forEach(([name, field]) => {
     fields[name] = {
@@ -88,6 +98,8 @@ function normalizeUnifiedFields(entity = {}) {
 }
 
 function mergeRdfStructure(defaultStructure, persistedStructure) {
+  // Keep required core defaults while allowing persisted structures to override
+  // editable fields and ontology metadata.
   const merged = { ...persistedStructure };
   merged.prefixes = { ...(defaultStructure.prefixes || {}), ...(persistedStructure.prefixes || {}) };
   for (const key of ["classes", "equivalentClasses", "uriTemplates"]) {
@@ -120,6 +132,8 @@ function loadPersistedStructure() {
   return normalizeStructure(mergeRdfStructure(deepClone(DEFAULT_RDF), JSON.parse(readFileSync(structurePath, "utf8"))));
 }
 
+// RDF and PREFIXES are module-level because resolvers regenerate them when an
+// organisation-specific structure becomes active.
 export let RDF = loadPersistedStructure();
 PREFIXES = prefixesFromStructure(RDF);
 
@@ -136,6 +150,8 @@ export function updateRdfStructureFromJson(json) {
 }
 
 export function applyRdfStructureFromJson(json) {
+  // Apply without writing when a resolver is temporarily switching to an
+  // organisation-specific structure for one request.
   const nextStructure = parseRdfStructureJson(json);
   RDF = nextStructure;
   PREFIXES = prefixesFromStructure(RDF);
@@ -155,6 +171,8 @@ export function parseRdfStructureJson(json) {
 }
 
 function validateRdfStructure(structure) {
+  // Core report fields are required because resolvers and report metadata updates
+  // depend on these predicates always existing.
   const requiredPaths = [
     ["prefixes", "sitrep"],
     ["prefixes", "resource"],
@@ -187,6 +205,8 @@ function validateRdfStructure(structure) {
 }
 
 function normalizeStructure(structure) {
+  // The normalizer accepts older saved shapes and fills derived defaults so every
+  // caller can assume classes, URI templates, and generated ID fields exist.
   const normalized = { ...structure };
   normalized.prefixes = normalized.prefixes || {
     sitrep: normalized.namespace || "http://sitrep.example.org/",
@@ -240,6 +260,8 @@ function normalizeStructure(structure) {
 }
 
 function stripDirectionSettings(structure) {
+  // Direction used to be editable UI metadata. It is now derived elsewhere, so
+  // persisted structures should not keep stale direction flags.
   Object.keys({ ...(structure.classes || {}), ...(structure.uriTemplates || {}) }).forEach(entityType => {
     stripDirectionSettingsFromFields(structure[entityType]?.fields || {});
   });
@@ -260,6 +282,8 @@ function stripDirectionSettingsFromFields(fields = {}) {
 }
 
 function normalizeCreateEntityTemplates(structure) {
+  // Linked fields need enough target metadata to create or reference entities
+  // from user input without additional frontend configuration.
   Object.keys({ ...(structure.classes || {}), ...(structure.uriTemplates || {}) }).forEach(entityType => {
     normalizeCreateEntityTemplatesForFields(structure, structure[entityType]?.fields || {});
     normalizeNestedGroupPredicates(Object.fromEntries(groupFieldEntries(structure[entityType]?.fields || {})));
@@ -358,6 +382,8 @@ function normalizeEntityStructure(entityType, entity = {}, uriTemplate = "") {
 }
 
 function normalizeEventTypeOptions(structure) {
+  // Legacy event-type groups are converted into conditional options so old
+  // structures still render in the current DynamicFieldForm.
   const reportItem = structure.reportItem || {};
   reportItem.fields = reportItem.fields || {};
   const eventType = reportItem.fields.eventType || {
@@ -417,6 +443,7 @@ function classValueForOption(optionName) {
 }
 
 export function editableFieldEntries(entityType) {
+  // GraphQL exposes a UI-friendly array form instead of the internal keyed map.
   const entity = RDF[entityType];
   const fieldKind = field => field.inputType === "import-class"
     ? "importClass"
@@ -473,10 +500,14 @@ export function escapeSparqlString(str) {
 }
 
 export function entityUri(entityType, id) {
+  // Entity URIs are generated from the active RDF structure so organisations can
+  // customize templates without changing resolver code.
   return applyTemplate(RDF.uriTemplates[entityType], entityTemplateValues(entityType, id));
 }
 
 export function nestedGroupUri(parentSubject, groupName) {
+  // Per-instance nested groups live under the parent subject to avoid collisions
+  // between repeated group names across entities.
   if (!parentSubject) return null;
   if (String(parentSubject).startsWith("<")) {
     return String(parentSubject).replace(/>$/, `_${groupName}>`);
@@ -594,6 +625,7 @@ export function termToIri(term) {
   if (!term) return null;
   const trimmedTerm = String(term).trim();
   if (trimmedTerm.startsWith("<")) return trimmedTerm;
+  // Plain labels become resource IRIs so text input can create linked entities.
   const safeTerm = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(trimmedTerm)
     ? trimmedTerm
     : resourceTermFromLabel(trimmedTerm);
@@ -608,6 +640,8 @@ export function literal(value, datatype) {
 }
 
 export function objectTerm(value, field = {}) {
+  // Field metadata decides whether a value is emitted as an IRI or a typed
+  // literal in generated triples.
   if (value === null || value === undefined || value === "") return null;
   if (field.objectType === "uri") return termToIri(value);
   return literal(value, field.datatype);
@@ -638,6 +672,8 @@ export function classTermForEntityOrClass(structure, value) {
 }
 
 export function classPropertyTriples(structure = RDF) {
+  // Support both the older equivalentClasses map and the newer explicit
+  // classProperties array while producing one canonical triple list.
   const legacyEquivalentTriples = Object.entries(structure.equivalentClasses || {})
     .flatMap(([entityType, equivalentClass]) => {
       const className = structure.classes?.[entityType];
@@ -669,6 +705,8 @@ export function selectVariables(fields) {
 }
 
 export function fieldPatterns(subject, fields) {
+  // Query patterns mirror field definitions and make optional fields optional in
+  // SPARQL so missing values do not hide the whole entity.
   return Object.entries(fields)
     .map(([fieldName, field]) => {
       if (field.options) {
@@ -697,6 +735,8 @@ export function objectFromBinding(binding, fields) {
 }
 
 export function triplesFromFields(subject, fields, data) {
+  // Scalar, array, linked, and conditional fields all produce triples through
+  // this path; nested groups are handled separately below.
   const sharedLinkedEntityIds = sharedLinkedEntityIdsForFields(fields, data);
   return scalarFieldEntries(fields)
     .map(([fieldName, field]) => {
@@ -734,6 +774,8 @@ function firstAllocatedLinkedEntityId(value) {
 }
 
 function sharedLinkedEntityIdsForFields(fields = {}, data = {}) {
+  // When multiple fields create the same linked entity in one form submission,
+  // share the allocated ID so both predicates point to the same resource.
   const entriesByKey = new Map();
   for (const [fieldName, field] of Object.entries(fields || {})) {
     if (!field || typeof field !== "object") continue;
@@ -774,6 +816,8 @@ function entityTriplesFromInput(entitySubject, entityType, input, field) {
 }
 
 function triplesFromFieldValue(subject, field, value, sharedId = null) {
+  // createEntityFromInput turns label text into a new target entity plus a link
+  // from the current subject to that entity.
   return valuesForField(value, field)
     .map(inputValue => {
       if (!field.createEntityFromInput) return triple(subject, field.predicate, inputValue, field);
@@ -830,6 +874,8 @@ function triplesFromConditionalOption(subject, field, selectedOption, option = {
 }
 
 export function triplesFromNestedGroups(subject, groups, data, sharedLinkedEntityIds = sharedLinkedEntityIdsForFields(groups, data)) {
+  // Nested groups are emitted as separate resources and then linked from the
+  // parent subject, preserving group structure in RDF.
   return groupFieldEntries(groups || {})
     .map(([groupName, group]) => {
       const rawGroupValue = data[groupName];
@@ -868,6 +914,8 @@ export function triplesFromNestedGroups(subject, groups, data, sharedLinkedEntit
 }
 
 export function reportItemTriples(item) {
+  // Report items include type triples, editable fields, and any nested/linked
+  // group resources generated by the active structure.
   const subject = entityUri("reportItem", item.entryNumber);
   const sharedLinkedEntityIds = sharedLinkedEntityIdsForFields(RDF.reportItem.fields, item);
   let triples = rdfTypeTriple(subject, RDF.classes.reportItem);
@@ -878,6 +926,8 @@ export function reportItemTriples(item) {
 }
 
 export function reportTriples(report) {
+  // Reports use the same field machinery, then add report-item membership links
+  // from selectedItemIds.
   const subject = entityUri("report", report.id);
   const sharedLinkedEntityIds = sharedLinkedEntityIdsForFields(RDF.report.fields, report);
   let triples = rdfTypeTriple(subject, RDF.classes.report);

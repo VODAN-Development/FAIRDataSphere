@@ -20,6 +20,7 @@ import {
   organisationRepositoryConfig,
   rdfStructurePresetJson,
   saveOrganisationRdfStructurePreset,
+  upsertOrganisationRole,
   updateOrganisationRdfStructureJson,
   updateOrganisation,
   updateOrganisationMemberRole,
@@ -67,7 +68,13 @@ import {
 
 const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "data");
 const COMPILED_REPORTS_DIR = join(DATA_DIR, "compiled-reports");
+const REPORT_AUTOMATIONS_DIR = join(DATA_DIR, "report-automations");
 const cleanedAppOrganisationMetadataRepositories = new Set();
+const automationRunLocks = new Set();
+
+// ---------------------------------------------------------------------------
+// General helpers
+// ---------------------------------------------------------------------------
 
 function maxNumericBinding(result, variableName) {
   const values = result.results.bindings
@@ -76,6 +83,10 @@ function maxNumericBinding(result, variableName) {
 
   return values.length > 0 ? Math.max(...values) : 0;
 }
+
+// ---------------------------------------------------------------------------
+// Compiled report file store
+// ---------------------------------------------------------------------------
 
 function compiledReportStoreKey(organisationId) {
   return String(organisationId || "no-organisation").replace(/[^A-Za-z0-9_-]/g, "_");
@@ -97,7 +108,13 @@ function compiledReportFilePath(organisationId) {
   return join(COMPILED_REPORTS_DIR, `${compiledReportStoreKey(organisationId)}.json`);
 }
 
+function reportAutomationFilePath(organisationId) {
+  return join(REPORT_AUTOMATIONS_DIR, `${compiledReportStoreKey(organisationId)}.json`);
+}
+
 async function readCompiledReportStore(organisationId) {
+  // Compiled reports are presentation artifacts, so they are kept in JSON files
+  // instead of the RDF repository that stores report/report-item data.
   try {
     const json = await readFile(compiledReportFilePath(organisationId), "utf8");
     const store = JSON.parse(json);
@@ -114,6 +131,24 @@ async function readCompiledReportStore(organisationId) {
 async function writeCompiledReportStore(organisationId, store) {
   await mkdir(COMPILED_REPORTS_DIR, { recursive: true });
   await writeFile(compiledReportFilePath(organisationId), `${JSON.stringify(store, null, 2)}\n`, "utf8");
+}
+
+async function readReportAutomationStore(organisationId) {
+  try {
+    const json = await readFile(reportAutomationFilePath(organisationId), "utf8");
+    const store = JSON.parse(json);
+    return {
+      schedules: Array.isArray(store.schedules) ? store.schedules.map(reportAutomationPayload) : [],
+    };
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    return { schedules: [] };
+  }
+}
+
+async function writeReportAutomationStore(organisationId, store) {
+  await mkdir(REPORT_AUTOMATIONS_DIR, { recursive: true });
+  await writeFile(reportAutomationFilePath(organisationId), `${JSON.stringify(store, null, 2)}\n`, "utf8");
 }
 
 function normalizeCompiledReportConfig(config = {}) {
@@ -136,6 +171,212 @@ function compiledReportPayload(report) {
     itemFieldNames: Array.isArray(report.itemFieldNames) ? report.itemFieldNames : [],
   };
 }
+
+function reportAutomationPayload(schedule = {}) {
+  return {
+    id: String(schedule.id || Date.now()),
+    name: schedule.name || "Automatic report",
+    enabled: schedule.enabled !== false,
+    intervalMinutes: Math.max(1, parseInt(schedule.intervalMinutes, 10) || 1440),
+    itemSelectionMode: schedule.itemSelectionMode === "new-unreported-since-latest-report"
+      ? "new-unreported-since-latest-report"
+      : "manual",
+    selectedItemIds: (schedule.selectedItemIds || []).map(id => parseInt(id, 10)).filter(Number.isFinite),
+    reportFieldValues: Array.isArray(schedule.reportFieldValues)
+      ? schedule.reportFieldValues.map(field => ({
+        name: String(field.name || ""),
+        value: field.value === undefined || field.value === null ? null : String(field.value),
+      })).filter(field => field.name)
+      : [],
+    compileEnabled: schedule.compileEnabled !== false,
+    compileItemFieldNames: Array.isArray(schedule.compileItemFieldNames) ? schedule.compileItemFieldNames.filter(Boolean) : [],
+    compiledConfig: normalizeCompiledReportConfig(schedule.compiledConfig || {}),
+    nextRunAt: schedule.nextRunAt || new Date(Date.now() + (parseInt(schedule.intervalMinutes, 10) || 1440) * 60000).toISOString(),
+    lastRunAt: schedule.lastRunAt || null,
+    lastReportId: schedule.lastReportId || null,
+    lastCompiledReportId: schedule.lastCompiledReportId || null,
+    lastRunMessage: schedule.lastRunMessage || null,
+    createdAt: schedule.createdAt || new Date().toISOString(),
+    updatedAt: schedule.updatedAt || new Date().toISOString(),
+  };
+}
+
+function normalizeReportAutomationInput(input, existing = {}) {
+  const intervalMinutes = Math.max(1, parseInt(input.intervalMinutes, 10) || existing.intervalMinutes || 1440);
+  const now = new Date();
+  return reportAutomationPayload({
+    ...existing,
+    id: existing.id || `${Date.now()}`,
+    name: String(input.name || existing.name || "Automatic report").trim() || "Automatic report",
+    enabled: input.enabled,
+    intervalMinutes,
+    itemSelectionMode: input.itemSelectionMode,
+    selectedItemIds: input.selectedItemIds || [],
+    reportFieldValues: input.reportFieldValues || [],
+    compileEnabled: input.compileEnabled,
+    compileItemFieldNames: input.compileItemFieldNames || [],
+    compiledConfig: normalizeCompiledReportConfig(input.compiledConfig || existing.compiledConfig || {}),
+    nextRunAt: existing.nextRunAt || nextAutomationRunAt(now, intervalMinutes),
+    createdAt: existing.createdAt || now.toISOString(),
+    updatedAt: now.toISOString(),
+  });
+}
+
+function nextAutomationRunAt(fromDate, intervalMinutes) {
+  return new Date(fromDate.getTime() + Math.max(1, parseInt(intervalMinutes, 10) || 1440) * 60000).toISOString();
+}
+
+function numericReportItemIds(report = {}) {
+  return (report.selectedItemIds || []).map(id => parseInt(id, 10)).filter(Number.isFinite);
+}
+
+function latestReportByCreatedAt(reports = []) {
+  return [...reports].sort((left, right) => {
+    const leftTime = Date.parse(left.createdAt || "") || 0;
+    const rightTime = Date.parse(right.createdAt || "") || 0;
+    if (rightTime !== leftTime) return rightTime - leftTime;
+    return (parseInt(right.id, 10) || 0) - (parseInt(left.id, 10) || 0);
+  })[0] || null;
+}
+
+function automaticReportItemIds(schedule, reports, reportItems) {
+  if (schedule.itemSelectionMode !== "new-unreported-since-latest-report") {
+    return schedule.selectedItemIds || [];
+  }
+
+  const reportedIds = new Set(reports.flatMap(numericReportItemIds));
+  const latestReport = latestReportByCreatedAt(reports);
+  const latestReportCreatedAt = Date.parse(latestReport?.createdAt || "") || 0;
+  const latestReportMaxItemId = Math.max(0, ...numericReportItemIds(latestReport));
+
+  return reportItems
+    .filter(item => {
+      const itemId = parseInt(item.entryNumber, 10);
+      if (!Number.isFinite(itemId) || reportedIds.has(itemId)) return false;
+      const itemCreatedAt = Date.parse(item.createdAt || "") || 0;
+      return itemCreatedAt && latestReportCreatedAt
+        ? itemCreatedAt > latestReportCreatedAt
+        : itemId > latestReportMaxItemId;
+    })
+    .map(item => parseInt(item.entryNumber, 10))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+}
+
+function displayFieldValue(fieldValues = [], name) {
+  return fieldValues.find(field => field.name === name)?.value;
+}
+
+function reportDisplayNumber(report) {
+  return displayFieldValue(report?.fieldValues || [], "reportNumber") || report?.id || "";
+}
+
+function reportDisplayTitle(report) {
+  return displayFieldValue(report?.fieldValues || [], "title")
+    || displayFieldValue(report?.fieldValues || [], "reportTitle")
+    || `Report ${report?.id || ""}`.trim();
+}
+
+function compiledBodyMarkdown({ report, items, config, selectedItemIds, itemFieldNames }) {
+  const includedNames = new Set(itemFieldNames || []);
+  const itemsById = new Map(items.map(item => [parseInt(item.entryNumber, 10), item]));
+  return selectedItemIds
+    .map(itemId => itemsById.get(parseInt(itemId, 10)))
+    .filter(Boolean)
+    .map((item, index) => {
+      const title = displayFieldValue(item.fieldValues || [], "title") || `Report item ${item.entryNumber}`;
+      const paragraph = displayFieldValue(item.fieldValues || [], "paragraph") || title;
+      const details = (item.fieldValues || [])
+        .filter(field => field.value && includedNames.has(field.name))
+        .filter(field => field.name !== "paragraph" && field.name !== "title")
+        .map(field => config.includeFieldLabels ? `**${field.label || field.name}:** ${field.value}` : field.value);
+      return [`## ${index + 1}. ${title}`, paragraph, ...details].filter(Boolean).join("\n\n");
+    })
+    .join("\n\n") || `No report items selected for ${reportDisplayTitle(report)}.`;
+}
+
+function markdownToHtml(markdown) {
+  return String(markdown || "")
+    .split(/\n{2,}/)
+    .map(block => block.trim())
+    .filter(Boolean)
+    .map(block => {
+      if (block.startsWith("## ")) return `<h2>${block.slice(3)}</h2>`;
+      return `<p>${block.replace(/\n/g, "<br>")}</p>`;
+    })
+    .join("\n");
+}
+
+async function createCompiledReportForReport(report, selectedItemIds, itemFieldNames, config, organisationId) {
+  const store = await readCompiledReportStore(organisationId);
+  const title = `${config.reportSeriesTitle || "Situation Report"} No. ${reportDisplayNumber(report) || report.id}`;
+  const subtitle = reportDisplayTitle(report);
+  const items = await resolvers.Query.reportItems(null, { organisationId }, systemContext());
+  const bodyMarkdown = compiledBodyMarkdown({ report, items, config, selectedItemIds, itemFieldNames });
+  const now = new Date().toISOString();
+  const compiled = compiledReportPayload({
+    id: `${Date.now()}`,
+    sourceReportId: report.id,
+    title,
+    subtitle,
+    executiveSummary: `${selectedItemIds.length} report item${selectedItemIds.length === 1 ? "" : "s"} compiled from ${subtitle}.`,
+    bodyMarkdown,
+    bodyHtml: markdownToHtml(bodyMarkdown),
+    selectedItemIds,
+    itemFieldNames,
+    configSnapshot: JSON.stringify(config),
+    createdAt: now,
+    updatedAt: now,
+  });
+  await writeCompiledReportStore(organisationId, {
+    ...store,
+    reports: [compiled, ...store.reports],
+  });
+  return compiled;
+}
+
+async function executeReportAutomation(organisationId, schedule, context = systemContext()) {
+  const reports = await resolvers.Query.reports(null, { organisationId }, context);
+  const reportItems = await resolvers.Query.reportItems(null, { organisationId }, context);
+  const selectedItemIds = automaticReportItemIds(schedule, reports, reportItems);
+  const createdReport = await resolvers.Mutation.createReportFromFields(null, {
+    fieldValues: schedule.reportFieldValues,
+    selectedItemIds,
+    organisationId,
+  }, context);
+
+  let compiledReport = null;
+  if (schedule.compileEnabled) {
+    compiledReport = await createCompiledReportForReport(
+      createdReport,
+      selectedItemIds,
+      schedule.compileItemFieldNames || [],
+      normalizeCompiledReportConfig(schedule.compiledConfig || {}),
+      organisationId
+    );
+  }
+
+  return {
+    report: createdReport,
+    compiledReport,
+    selectedItemIds,
+  };
+}
+
+function systemContext() {
+  return {
+    currentUser: {
+      id: "system-report-automation",
+      email: "system@sitrep.local",
+      name: "Report automation",
+      role: "admin",
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Linked entity allocation and validation
+// ---------------------------------------------------------------------------
 
 function sparqlVariableName(fieldName, field = {}) {
   return field.variable || String(fieldName).replace(/[^A-Za-z0-9_]/g, "_");
@@ -188,6 +429,8 @@ async function linkedEntityUriExists(field, value) {
 }
 
 async function nextEntityId(entityType) {
+  // IDs can exist both as explicit fields and inside URI templates, so inspect
+  // both sources and allocate one higher than the current maximum.
   const idFieldName = entityIdField(entityType);
   const idField = RDF[entityType]?.fields?.[idFieldName];
   const className = RDF.classes?.[entityType];
@@ -252,6 +495,8 @@ function linkedFieldEntriesForSharedEntity(fields = {}) {
 }
 
 async function sharedLinkedEntityIdsForFields(fields = {}, data = {}, nextIds) {
+  // Multiple fields in the same form can describe the same new linked resource;
+  // allocate one ID and share it across those fields.
   const entriesByKey = new Map();
   for (const [fieldName, field, key] of linkedFieldEntriesForSharedEntity(fields)) {
     if (!fieldHasInputValue(data[fieldName])) continue;
@@ -273,6 +518,8 @@ async function sharedLinkedEntityIdsForFields(fields = {}, data = {}, nextIds) {
 }
 
 async function allocateEntityInput(fieldName, field, value, nextIds, sharedId = null) {
+  // Linked-field user input can be either an existing URI or text that should
+  // create a new target entity.
   if (!field.createEntityFromInput) return value;
   const targetEntityType = field.targetEntityType;
   if (!targetEntityType) return value;
@@ -349,6 +596,8 @@ async function allocateGroupInput(group, value, nextIds, sharedId = null) {
 }
 
 async function allocateCreatedEntityInputs(entityType, data, nextIds = new Map()) {
+  // Walk the active RDF field structure and replace user-facing labels with the
+  // IDs/URI objects needed by triple generation.
   const nextData = { ...data };
   const entity = RDF[entityType] || {};
   const sharedLinkedEntityIds = await sharedLinkedEntityIdsForFields(entity.fields || {}, nextData, nextIds);
@@ -390,6 +639,10 @@ async function allocateCreatedEntityInputsForFields(fields, data, nextIds) {
   return nextData;
 }
 
+// ---------------------------------------------------------------------------
+// RDF loading and conversion helpers
+// ---------------------------------------------------------------------------
+
 async function getReportMetadata(reportId) {
   const subject = entityUri("report", reportId);
   const reportFields = queryFields(RDF.report.fields, []);
@@ -429,6 +682,8 @@ async function clearItemReportMetadata(itemId) {
 }
 
 async function deleteNestedGroupTriplesForSubject(entityType, subject) {
+  // Nested groups are represented as their own resources, so entity updates must
+  // remove those resources before inserting the replacement field set.
   const deletes = Object.entries(RDF[entityType]?.fields || {})
     .filter(([, group]) => isGroupField(group))
     .filter(([, group]) => group?.resourceMode !== "reusable")
@@ -548,6 +803,8 @@ async function loadGroupValueForSubject(parentSubject, groupName, group) {
 }
 
 async function loadFieldsForSubject(subject, fields = {}, legacySubject = null) {
+  // Load scalar, conditional, and grouped values according to the active RDF
+  // structure, including legacy subject fallback during migrations.
   const data = {};
   for (const [fieldName, field] of Object.entries(fields || {})) {
     if (!field || typeof field !== "object" || !field.predicate) continue;
@@ -680,6 +937,8 @@ function reportFromBinding(binding, id) {
 }
 
 function rdfEntityFromObject(entityType, entity) {
+  // Convert internal entity objects into the generic GraphQL entity shape used by
+  // the Items page for custom classes.
   const idFieldName = entityIdField(entityType);
   const id = entity[idFieldName] ?? entity.id ?? "";
   const uri = entity.uri || expandPrefixedName(entityUri(entityType, id));
@@ -767,6 +1026,8 @@ async function loadEntityGroupFields(entityType, entityData) {
 }
 
 async function rdfEntitiesForType(entityType, organisationId, context) {
+  // Built-in report/reportItem entities have specialized queries; custom entity
+  // types use a generic class-based SPARQL query.
   await requireOrganisationView(context, organisationId);
   return withOrganisationRepository(organisationId, async () => {
   if (!RDF.classes?.[entityType]) throw new Error(`Unknown RDF entity type: ${entityType}`);
@@ -832,6 +1093,10 @@ function scopedReportLinkDelete(selectedItemsField, selectedItemObject) {
   }`;
 }
 
+// ---------------------------------------------------------------------------
+// Organisation scoping and active RDF structures
+// ---------------------------------------------------------------------------
+
 async function requireOrganisationView(context, organisationId) {
   const user = requireAuth(context);
   if (user.role === "admin" && !organisationId) return user;
@@ -853,6 +1118,8 @@ async function requireOrganisationWrite(context, organisationId) {
 }
 
 async function withOrganisationRepository(organisationId, callback) {
+  // Every organisation can use its own AllegroGraph repository and RDF structure;
+  // this wrapper activates both for the duration of one resolver operation.
   const repositoryConfig = await organisationRepositoryConfig(organisationId);
   await applyOrganisationRdfStructure(organisationId);
   return withRepository(repositoryConfig, async () => {
@@ -898,6 +1165,8 @@ function isGlobalPresetScope(scope) {
 }
 
 async function updateActiveRdfStructure(organisationId, json) {
+  // Structure changes update the active in-memory structure, migrate stored RDF
+  // where possible, and then persist the structure for that organisation.
   const oldStructure = JSON.parse(rdfStructureJson());
   const nextStructure = encryptSourceFieldsInStructure(parseRdfStructureJson(json));
   await migrateStoredRdf(oldStructure, nextStructure);
@@ -906,6 +1175,10 @@ async function updateActiveRdfStructure(organisationId, json) {
   await syncEquivalentClassTriples(nextStructure);
   return rdfStructurePayload();
 }
+
+// ---------------------------------------------------------------------------
+// Field payload encryption and GraphQL serialization
+// ---------------------------------------------------------------------------
 
 function parseFieldValue(field, value) {
   if (value === null || value === undefined) return value;
@@ -941,6 +1214,8 @@ function decryptDataForField(field, value) {
 }
 
 function encryptSourceFieldsInStructure(structure) {
+  // Source fields are sensitive by design, so the structure marks them encrypted
+  // even if an imported preset omitted that flag.
   const visitFields = (fields = {}) => Object.fromEntries(
     Object.entries(fields).map(([fieldName, field]) => {
       if (!field || typeof field !== "object") return [fieldName, field];
@@ -974,6 +1249,8 @@ function encryptSourceFieldsInStructure(structure) {
 }
 
 function fieldValuesForEntity(entityType, entity) {
+  // The frontend expects a uniform array of field payloads for reports, items,
+  // and custom RDF entities.
   return editableFieldEntries(entityType).map(field => ({
     name: field.name,
     label: field.label || field.name,
@@ -1001,6 +1278,10 @@ function valueForFieldPayload(field, value) {
   }
   return decryptDataForField(field, value) ?? null;
 }
+
+// ---------------------------------------------------------------------------
+// RDF structure migration helpers
+// ---------------------------------------------------------------------------
 
 function queryFields(fields, requiredFieldNames) {
   const requiredNames = new Set(requiredFieldNames);
@@ -1049,6 +1330,8 @@ function entityTypesFromStructure(structure) {
 }
 
 function changedPredicates(oldStructure, nextStructure, entityType) {
+  // Detect renamed predicates so saved data can move with the structure instead
+  // of disappearing from the UI.
   const nextFieldsByName = new Map(allPredicateFields(nextStructure, entityType).map(field => [field.name, field]));
   return allPredicateFields(oldStructure, entityType)
     .map(oldField => ({ oldField, nextField: nextFieldsByName.get(oldField.name) }))
@@ -1214,6 +1497,8 @@ function deletedEquivalentClassPairs(oldStructure, nextStructure) {
 }
 
 async function renamePredicate(oldPredicate, nextPredicate) {
+  // Copy all triples to the new predicate before deleting the old one so the
+  // migration preserves subject/object values exactly.
   const before = await countPredicateTriples(oldPredicate);
   await runSparqlUpdate(`${PREFIXES}
     DELETE {
@@ -1566,6 +1851,8 @@ async function renameEntitySubjects(oldBase, nextBase) {
 }
 
 async function migrateStoredRdf(oldStructure, nextStructure) {
+  // Apply best-effort migrations for structural changes made in the RDF editor.
+  // Each operation reports its outcome so the UI can display what was migrated.
   const results = [];
   for (const entityType of deletedEntityTypes(oldStructure, nextStructure)) {
     await deleteEntityTypeData(entityType, oldStructure);
@@ -1611,6 +1898,10 @@ async function migrateStoredRdf(oldStructure, nextStructure) {
   return results;
 }
 
+// ---------------------------------------------------------------------------
+// GraphQL resolver map
+// ---------------------------------------------------------------------------
+
 const resolvers = {
   ReportItem: {
     fieldValues: item => fieldValuesForEntity("reportItem", item),
@@ -1647,6 +1938,8 @@ const resolvers = {
     rdfEntities: async (_, { entityType, organisationId }, context) => rdfEntitiesForType(entityType, organisationId, context),
 
     reportItems: async (_, { organisationId }, context) => {
+      // Report items are aggregated by URI because optional fields can produce
+      // multiple SPARQL bindings for the same item.
       await requireOrganisationView(context, organisationId);
       return withOrganisationRepository(organisationId, async () => {
       const itemFields = queryFields(RDF.reportItem.fields, ["entryNumber"]);
@@ -1700,6 +1993,8 @@ const resolvers = {
     },
 
     reports: async (_, { organisationId }, context) => {
+      // Report IDs are derived from URI templates, then enriched with selected
+      // report-item links from a separate helper query.
       await requireOrganisationView(context, organisationId);
       return withOrganisationRepository(organisationId, async () => {
       const reportFields = queryFields(RDF.report.fields, []);
@@ -1772,6 +2067,12 @@ const resolvers = {
       const report = store.reports.find(candidate => String(candidate.id) === String(id));
       return report ? compiledReportPayload(report) : null;
     },
+
+    reportAutomations: async (_, { organisationId }, context) => {
+      await requireOrganisationView(context, organisationId);
+      const store = await readReportAutomationStore(organisationId);
+      return store.schedules.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    },
   },
 
   Mutation: {
@@ -1832,12 +2133,19 @@ const resolvers = {
       return updateOrganisationMemberRole(user, organisationId, userId, role);
     },
 
+    upsertOrganisationRole: async (_, { organisationId, id, name, permissions }, context) => {
+      const user = requireAuth(context);
+      return upsertOrganisationRole(user, organisationId, { id, name, permissions });
+    },
+
     deleteOrganisation: async (_, { id }, context) => {
       const user = requireAuth(context);
       return deleteOrganisation(user, id);
     },
 
     updateRdfStructure: async (_, { json, organisationId }, context) => {
+      // Admins may edit the global unscoped structure; organisation structures
+      // require write access to that organisation.
       const user = requireAuth(context);
       if (!(user.role === "admin" && !organisationId)) {
         await requireOrganisationWrite(context, organisationId);
@@ -1880,6 +2188,8 @@ const resolvers = {
     },
 
     createReportItemFromFields: async (_, { fieldValues, organisationId }, context) => {
+      // Form payloads are normalized, linked-entity IDs are allocated, and then
+      // the final item is inserted as RDF triples.
       await requireOrganisationWrite(context, organisationId);
       return withOrganisationRepository(organisationId, async () => {
       const entryNumber = await nextEntityId("reportItem");
@@ -1980,6 +2290,8 @@ const resolvers = {
     },
 
     updateReportFromFields: async (_, { id, fieldValues, selectedItemIds, organisationId }, context) => {
+      // Updating a report also refreshes denormalized metadata stored on selected
+      // report items so list views can show report context cheaply.
       await requireOrganisationWrite(context, organisationId);
       return withOrganisationRepository(organisationId, async () => {
       const subject = entityUri("report", id);
@@ -2137,7 +2449,67 @@ const resolvers = {
       return nextReport;
     },
 
+    upsertReportAutomation: async (_, { id, input, organisationId }, context) => {
+      await requireOrganisationWrite(context, organisationId);
+      const store = await readReportAutomationStore(organisationId);
+      const existing = id ? store.schedules.find(schedule => String(schedule.id) === String(id)) : null;
+      const schedule = normalizeReportAutomationInput(input, existing || {});
+      const schedules = existing
+        ? store.schedules.map(candidate => String(candidate.id) === String(id) ? schedule : candidate)
+        : [schedule, ...store.schedules];
+      await writeReportAutomationStore(organisationId, { schedules });
+      return schedule;
+    },
+
+    deleteReportAutomation: async (_, { id, organisationId }, context) => {
+      await requireOrganisationWrite(context, organisationId);
+      const store = await readReportAutomationStore(organisationId);
+      await writeReportAutomationStore(organisationId, {
+        schedules: store.schedules.filter(schedule => String(schedule.id) !== String(id)),
+      });
+      return true;
+    },
+
+    runReportAutomation: async (_, { id, organisationId }, context) => {
+      await requireOrganisationWrite(context, organisationId);
+      const store = await readReportAutomationStore(organisationId);
+      const scheduleIndex = store.schedules.findIndex(schedule => String(schedule.id) === String(id));
+      if (scheduleIndex === -1) throw new Error("Report automation not found.");
+      const schedule = store.schedules[scheduleIndex];
+      const now = new Date();
+      try {
+        const result = await executeReportAutomation(organisationId, schedule, context);
+        const nextSchedule = reportAutomationPayload({
+          ...schedule,
+          lastRunAt: now.toISOString(),
+          nextRunAt: nextAutomationRunAt(now, schedule.intervalMinutes),
+          lastReportId: result.report.id,
+          lastCompiledReportId: result.compiledReport?.id || null,
+          lastRunMessage: `Created report ${result.report.id} with ${result.selectedItemIds.length} item${result.selectedItemIds.length === 1 ? "" : "s"}.`,
+          updatedAt: now.toISOString(),
+        });
+        const schedules = [...store.schedules];
+        schedules[scheduleIndex] = nextSchedule;
+        await writeReportAutomationStore(organisationId, { schedules });
+        return nextSchedule;
+      } catch (error) {
+        const nextSchedule = reportAutomationPayload({
+          ...schedule,
+          lastRunAt: now.toISOString(),
+          nextRunAt: nextAutomationRunAt(now, schedule.intervalMinutes),
+          lastRunMessage: `Failed: ${error.message}`,
+          updatedAt: now.toISOString(),
+        });
+        const schedules = [...store.schedules];
+        schedules[scheduleIndex] = nextSchedule;
+        await writeReportAutomationStore(organisationId, { schedules });
+        throw error;
+      }
+    },
+
     createRdfEntityFromFields: async (_, { entityType, fieldValues, organisationId }, context) => {
+      // Custom entity creation shares the same dynamic field machinery as report
+      // items, then emits a generic RdfEntity response for the frontend.
       await requireOrganisationWrite(context, organisationId);
       return withOrganisationRepository(organisationId, async () => {
       if (entityType === "reportItem") {
@@ -2230,6 +2602,8 @@ const resolvers = {
   },
 };
 
+// Secure every query by default, leaving only me available for unauthenticated
+// callers so the frontend can determine sign-in state.
 for (const [name, resolver] of Object.entries(resolvers.Query)) {
   if (name === "me") continue;
   resolvers.Query[name] = (parent, args, context, info) => {
@@ -2238,6 +2612,8 @@ for (const [name, resolver] of Object.entries(resolvers.Query)) {
   };
 }
 
+// Secure mutations by default and require organisation data-write permission for
+// data-changing operations outside account and organisation membership flows.
 for (const [name, resolver] of Object.entries(resolvers.Mutation)) {
   if (["signUp", "signIn", "signOut"].includes(name)) continue;
   resolvers.Mutation[name] = async (parent, args, context, info) => {
@@ -2249,6 +2625,7 @@ for (const [name, resolver] of Object.entries(resolvers.Mutation)) {
       "leaveOrganisation",
       "updateOrganisation",
       "updateOrganisationMemberRole",
+      "upsertOrganisationRole",
       "deleteOrganisation",
     ]);
     if (!accountMutations.has(name) && !organisationMutations.has(name)) {
@@ -2259,6 +2636,40 @@ for (const [name, resolver] of Object.entries(resolvers.Mutation)) {
     }
     return resolver(parent, args, context, info);
   };
+}
+
+export async function runDueReportAutomations() {
+  const context = systemContext();
+  const organisations = await listOrganisations(context.currentUser);
+  const now = new Date();
+  const results = [];
+
+  for (const organisation of organisations) {
+    if (automationRunLocks.has(organisation.id)) continue;
+    automationRunLocks.add(organisation.id);
+    try {
+      const store = await readReportAutomationStore(organisation.id);
+      const dueSchedules = store.schedules.filter(schedule => (
+        schedule.enabled && Date.parse(schedule.nextRunAt || "") <= now.getTime()
+      ));
+      for (const schedule of dueSchedules) {
+        try {
+          const nextSchedule = await resolvers.Mutation.runReportAutomation(
+            null,
+            { id: schedule.id, organisationId: organisation.id },
+            context
+          );
+          results.push({ organisationId: organisation.id, scheduleId: schedule.id, ok: true, nextSchedule });
+        } catch (error) {
+          results.push({ organisationId: organisation.id, scheduleId: schedule.id, ok: false, error: error.message });
+        }
+      }
+    } finally {
+      automationRunLocks.delete(organisation.id);
+    }
+  }
+
+  return results;
 }
 
 export default resolvers;

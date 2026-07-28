@@ -8,6 +8,8 @@ export default defineConfig([
   globalIgnores(['dist']),
   {
     files: ['**/*.{js,jsx}'],
+    // Combine base JavaScript, React Hooks, and Vite React Refresh rules for the
+    // frontend source tree.
     extends: [
       js.configs.recommended,
       reactHooks.configs.flat.recommended,
@@ -23,6 +25,8 @@ export default defineConfig([
       },
     },
     rules: {
+      // Allow exported constants such as GraphQL documents while still flagging
+      // ordinary unused variables.
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
     },
   },

@@ -3,6 +3,7 @@ import { AuthContext } from './AuthContext.js';
 
 export function useAuth() {
   const context = useContext(AuthContext);
+  // Throwing here catches components that forgot to render under AuthProvider.
   if (!context) {
     throw new Error('useAuth must be used inside AuthProvider');
   }

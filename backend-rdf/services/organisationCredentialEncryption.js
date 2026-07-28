@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 
 const PREFIX = "enc:v1:";
 
+// Credential keys are separate from field encryption so repository passwords and
+// join passwords can be rotated independently.
 function credentialKey(envName) {
   const configured = process.env[envName];
   if (!configured) {
@@ -21,6 +23,8 @@ function isEncryptedValue(value) {
 }
 
 function encryptCredential(value, envName) {
+  // Existing encrypted values are left alone to avoid double-encrypting metadata
+  // during read/upgrade/write cycles.
   if (value === null || value === undefined || value === "" || isEncryptedValue(value)) return value;
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", credentialKey(envName), iv);
@@ -31,6 +35,7 @@ function encryptCredential(value, envName) {
 
 function decryptCredential(value, envName) {
   if (!isEncryptedValue(value)) return value;
+  // Stored payload layout is iv || authTag || ciphertext, encoded as base64url.
   const payload = Buffer.from(value.slice(PREFIX.length), "base64url");
   const iv = payload.subarray(0, 12);
   const tag = payload.subarray(12, 28);
