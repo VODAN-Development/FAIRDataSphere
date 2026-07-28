@@ -84,6 +84,15 @@ function maxNumericBinding(result, variableName) {
   return values.length > 0 ? Math.max(...values) : 0;
 }
 
+function paginationClause({ limit, offset } = {}) {
+  const safeLimit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 250) : null;
+  const safeOffset = Number.isInteger(offset) && offset > 0 ? offset : 0;
+  return [
+    safeLimit ? `LIMIT ${safeLimit}` : "",
+    safeOffset ? `OFFSET ${safeOffset}` : "",
+  ].filter(Boolean).join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Compiled report file store
 // ---------------------------------------------------------------------------
@@ -855,14 +864,21 @@ async function loadReportItemCollections(item) {
       continue;
     }
 
-    const optionalPatterns = subfields
+    const seenOptionPredicates = new Set();
+    const safeSubfields = subfields.filter(([, subfield]) => {
+      if (!subfield?.predicate) return false;
+      if (seenOptionPredicates.has(subfield.predicate)) return false;
+      seenOptionPredicates.add(subfield.predicate);
+      return true;
+    });
+    const optionalPatterns = safeSubfields
       .map(([subfieldName, subfield]) => {
         const variable = sparqlVariableName(subfieldName, subfield);
         const pattern = `${subject} ${subfield.predicate} ?${variable} .`;
         return `OPTIONAL { ${pattern} }`;
       })
       .join("\n");
-    const variables = subfields.map(([subfieldName, subfield]) => `?${sparqlVariableName(subfieldName, subfield)}`).join(" ");
+    const variables = safeSubfields.map(([subfieldName, subfield]) => `?${sparqlVariableName(subfieldName, subfield)}`).join(" ");
     const optionResult = await runSparqlQuery(`${PREFIXES}
       SELECT ${variables} WHERE {
         ${optionalPatterns}
@@ -874,6 +890,9 @@ async function loadReportItemCollections(item) {
       values: Object.fromEntries(
         subfields.map(([subfieldName, subfield]) => {
           const variable = sparqlVariableName(subfieldName, subfield);
+          if (!safeSubfields.some(([safeName]) => safeName === subfieldName)) {
+            return [subfieldName, undefined];
+          }
           if (subfield.allowMultiple || subfield.inputType === "uri-list" || subfield.inputType === "text-list") {
             const values = optionResult.results.bindings
               .map(resultBinding => resultBinding[variable]?.value)
@@ -1025,7 +1044,7 @@ async function loadEntityGroupFields(entityType, entityData) {
   return entityData;
 }
 
-async function rdfEntitiesForType(entityType, organisationId, context) {
+async function rdfEntitiesForType(entityType, organisationId, context, pagination = {}) {
   // Built-in report/reportItem entities have specialized queries; custom entity
   // types use a generic class-based SPARQL query.
   await requireOrganisationView(context, organisationId);
@@ -1033,7 +1052,7 @@ async function rdfEntitiesForType(entityType, organisationId, context) {
   if (!RDF.classes?.[entityType]) throw new Error(`Unknown RDF entity type: ${entityType}`);
   if (entityType === "report") return [];
   if (entityType === "reportItem") {
-    const items = await resolvers.Query.reportItems(null, { organisationId }, context);
+    const items = await resolvers.Query.reportItems(null, { organisationId, ...pagination }, context);
     return items.map(item => rdfEntityFromObject("reportItem", item));
   }
 
@@ -1047,6 +1066,7 @@ async function rdfEntitiesForType(entityType, organisationId, context) {
       ${fieldPatterns("?entity", fields)}
     }
     ORDER BY STR(?entity)
+    ${paginationClause(pagination)}
   `;
 
   const result = await runSparqlQuery(sparqlQuery);
@@ -1935,9 +1955,9 @@ const resolvers = {
       return listOrganisationRdfStructurePresets(organisationId);
     },
 
-    rdfEntities: async (_, { entityType, organisationId }, context) => rdfEntitiesForType(entityType, organisationId, context),
+    rdfEntities: async (_, { entityType, organisationId, limit, offset }, context) => rdfEntitiesForType(entityType, organisationId, context, { limit, offset }),
 
-    reportItems: async (_, { organisationId }, context) => {
+    reportItems: async (_, { organisationId, limit, offset }, context) => {
       // Report items are aggregated by URI because optional fields can produce
       // multiple SPARQL bindings for the same item.
       await requireOrganisationView(context, organisationId);
@@ -1950,6 +1970,7 @@ const resolvers = {
           ${fieldPatterns("?item", itemFields)}
         }
         ORDER BY DESC(?entryNumber)
+        ${paginationClause({ limit, offset })}
       `;
 
       const result = await runSparqlQuery(sparqlQuery);
@@ -1992,7 +2013,7 @@ const resolvers = {
       });
     },
 
-    reports: async (_, { organisationId }, context) => {
+    reports: async (_, { organisationId, limit, offset }, context) => {
       // Report IDs are derived from URI templates, then enriched with selected
       // report-item links from a separate helper query.
       await requireOrganisationView(context, organisationId);
@@ -2009,6 +2030,7 @@ const resolvers = {
           FILTER(REGEX(?id, "^[0-9]+$"))
         }
         ORDER BY DESC(?id)
+        ${paginationClause({ limit, offset })}
       `;
 
       const result = await runSparqlQuery(sparqlQuery);
@@ -2150,6 +2172,7 @@ const resolvers = {
       if (!(user.role === "admin" && !organisationId)) {
         await requireOrganisationWrite(context, organisationId);
       }
+      parseRdfStructureJson(json, { strict: true });
       return withOrganisationRepository(organisationId, async () => {
       return updateActiveRdfStructure(organisationId, json);
       });
@@ -2163,7 +2186,7 @@ const resolvers = {
       } else if (!(user.role === "admin" && !organisationId)) {
         await requireOrganisationWrite(context, organisationId);
       }
-      parseRdfStructureJson(json);
+      parseRdfStructureJson(json, { strict: true });
       return saveOrganisationRdfStructurePreset(presetOrganisationId, { name, json, createdBy: user.id });
     },
 
@@ -2173,6 +2196,7 @@ const resolvers = {
         await requireOrganisationWrite(context, organisationId);
       }
       const json = await rdfStructurePresetJson(presetScopeOrganisationId(organisationId, scope), id);
+      parseRdfStructureJson(json, { strict: true });
       return withOrganisationRepository(organisationId, async () => updateActiveRdfStructure(organisationId, json));
     },
 

@@ -104,8 +104,8 @@ const REPORT_FIELD_VALUE_FIELDS = gql`
 `;
 
 const GET_REPORT_ITEMS = gql`
-  query GetReportItems($organisationId: ID) {
-    reportItems(organisationId: $organisationId) {
+  query GetReportItems($organisationId: ID, $limit: Int, $offset: Int) {
+    reportItems(organisationId: $organisationId, limit: $limit, offset: $offset) {
       entryNumber
       reportId
       fieldValues {
@@ -120,8 +120,8 @@ const GET_REPORT_ITEMS = gql`
 
 const GET_REPORTS = gql`
   ${REPORT_FIELD_VALUE_FIELDS}
-  query GetReports($organisationId: ID) {
-    reports(organisationId: $organisationId) {
+  query GetReports($organisationId: ID, $limit: Int, $offset: Int) {
+    reports(organisationId: $organisationId, limit: $limit, offset: $offset) {
       id
       selectedItemIds
       createdAt
@@ -313,6 +313,7 @@ const DEFAULT_COMPILED_CONFIG = {
 };
 
 const DEFAULT_AUTOMATION_MODE = 'new-unreported-since-latest-report';
+const PAGE_SIZE = 100;
 
 function escapeHtml(value) {
   // Compiled reports can be exported as standalone HTML, so user-authored text is
@@ -598,8 +599,9 @@ export default function Reports() {
   const [compiledEditDraft, setCompiledEditDraft] = useState(null);
   const [selectedAutomationId, setSelectedAutomationId] = useState('');
   const [automationDraft, setAutomationDraft] = useState(null);
+  const [hasMoreReports, setHasMoreReports] = useState(true);
 
-  const queryVariables = { organisationId: activeOrganisationId };
+  const queryVariables = { organisationId: activeOrganisationId, limit: PAGE_SIZE, offset: 0 };
   const refetchScopedQueries = [
     { query: GET_REPORTS, variables: queryVariables },
     { query: GET_REPORT_ITEMS, variables: queryVariables },
@@ -615,7 +617,7 @@ export default function Reports() {
     variables: queryVariables,
     skip: !activeOrganisationId && !activeOrganisationIsUnscoped,
   });
-  const { data: reportsData, loading: reportsLoading, error: reportsError, refetch: refetchReports } = useQuery(GET_REPORTS, {
+  const { data: reportsData, loading: reportsLoading, error: reportsError, refetch: refetchReports, fetchMore: fetchMoreReports } = useQuery(GET_REPORTS, {
     variables: queryVariables,
     skip: !activeOrganisationId && !activeOrganisationIsUnscoped,
   });
@@ -749,6 +751,19 @@ export default function Reports() {
     || compiledReportsForSelectedReport[0]
     || null;
 
+  const loadMoreReports = async () => {
+    const result = await fetchMoreReports({
+      variables: { ...queryVariables, offset: reports.length },
+      updateQuery: (previous, { fetchMoreResult }) => ({
+        reports: [
+          ...(previous.reports || []),
+          ...(fetchMoreResult?.reports || []),
+        ],
+      }),
+    });
+    setHasMoreReports((result.data?.reports || []).length === PAGE_SIZE);
+  };
+
   useEffect(() => {
     if (selectedReport?.selectedItemIds) {
       setCompileItemIds(new Set(selectedReport.selectedItemIds.map(Number)));
@@ -759,6 +774,10 @@ export default function Reports() {
     setSelectedCompiledReportId('');
     setCompiledEditDraft(null);
   }, [selectedReport?.id]);
+
+  useEffect(() => {
+    setHasMoreReports(true);
+  }, [activeOrganisationId]);
 
   const reportHasItem = (report, item) => {
     return (report?.selectedItemIds || []).some(itemId => Number(itemId) === Number(item.entryNumber));
@@ -1380,6 +1399,11 @@ export default function Reports() {
                   </div>
                 </div>
               ))
+            )}
+            {hasMoreReports && reports.length >= PAGE_SIZE && (
+              <button type="button" className="secondary-btn load-more-button" onClick={loadMoreReports} disabled={loading}>
+                Load more
+              </button>
             )}
           </div>
         </aside>
