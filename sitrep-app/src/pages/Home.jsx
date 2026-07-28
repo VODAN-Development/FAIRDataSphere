@@ -20,6 +20,7 @@ const GET_HOME_OVERVIEW = gql`
 `;
 
 function DashboardPane({ title, meta, children, actionTo, actionLabel, tone = 'default' }) {
+  // Reusable dashboard panel keeps the home page metrics visually consistent.
   return (
     <section className={`home-pane ${tone}`}>
       <div className="home-pane-header">
@@ -37,6 +38,8 @@ function DashboardPane({ title, meta, children, actionTo, actionLabel, tone = 'd
 }
 
 export default function Home() {
+  // Home summarizes the active workspace and links into the core workflows once
+  // auth and organisation context are available.
   const { user } = useAuth();
   const {
     activeOrganisation,
@@ -59,6 +62,8 @@ export default function Home() {
   const assignedItems = reportItems.filter(item => item.reportId).length;
   const unassignedItems = reportItems.length - assignedItems;
   const rdfClassCount = (() => {
+    // The class count is derived from structure JSON so the dashboard can show a
+    // useful schema metric without a dedicated backend field.
     if (!data?.rdfStructure?.json) return 0;
     try {
       const structure = JSON.parse(data.rdfStructure.json);

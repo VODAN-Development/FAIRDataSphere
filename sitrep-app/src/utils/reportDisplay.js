@@ -1,4 +1,6 @@
 export function notifyReportsUpdated() {
+  // Some pages listen outside Apollo cache updates; toggling localStorage also
+  // notifies other browser tabs that report membership changed.
   window.dispatchEvent(new Event('reportsUpdated'));
   const currentValue = localStorage.getItem('reportsUpdated');
   localStorage.setItem('reportsUpdated', currentValue === '1' ? '0' : '1');
@@ -11,12 +13,15 @@ export function titleForEntity(entityType) {
 }
 
 function compactUri(value) {
+  // Show the local name of common HTTP IRIs so tables stay readable.
   const text = String(value || '');
   const match = text.match(/^(https?:\/\/[^#]+[#/])([^#/]+)$/);
   return match ? decodeURIComponent(match[2]).replace(/_/g, ' ') : text;
 }
 
 export function displayValue(field) {
+  // Dynamic field values may be scalar strings or JSON-encoded arrays/groups/
+  // conditionals; normalize each into compact display text for tables.
   if (!field.value) return '';
   if (field.kind === 'array') {
     try {

@@ -8,6 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, "../data");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 
+// Only expose non-sensitive account fields to GraphQL callers and session code.
 function publicUser(user) {
   if (!user) return null;
   return {
@@ -18,6 +19,7 @@ function publicUser(user) {
   };
 }
 
+// Users are stored in a simple JSON file; missing files mean a fresh install.
 async function readUsers() {
   try {
     const json = await readFile(USERS_FILE, "utf8");
@@ -28,6 +30,8 @@ async function readUsers() {
   }
 }
 
+// Writes are centralised so the data directory is created before first use and
+// the on-disk JSON stays human-readable for small deployments.
 async function writeUsers(users) {
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(USERS_FILE, `${JSON.stringify(users, null, 2)}\n`, "utf8");
@@ -47,6 +51,7 @@ export async function listUsersByIds(ids) {
 }
 
 export async function createUser({ email, password, name }) {
+  // Normalize email before uniqueness checks so casing cannot create duplicates.
   const normalizedEmail = String(email || "").trim().toLowerCase();
   if (!normalizedEmail || !normalizedEmail.includes("@")) {
     throw new Error("Please enter a valid email address.");
@@ -66,6 +71,7 @@ export async function createUser({ email, password, name }) {
     email: normalizedEmail,
     passwordHash: await hashPassword(password),
     name: String(name || "").trim() || null,
+    // The first registered account becomes the admin account.
     role: users.length === 0 ? "admin" : "user",
     createdAt: now,
     updatedAt: now,
@@ -117,6 +123,8 @@ export async function updateUserPassword(userId, { currentPassword, newPassword 
     throw new Error("New password must be at least 8 characters.");
   }
 
+  // Require the current password even for authenticated sessions to reduce the
+  // impact of an unattended browser session.
   const users = await readUsers();
   const userIndex = users.findIndex(user => user.id === userId);
   if (userIndex === -1) {

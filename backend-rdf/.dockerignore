@@ -1,3 +1,5 @@
+# Keep local dependencies, runtime data, and secrets out of the backend build
+# context.
 node_modules
 npm-debug.log*
 .env

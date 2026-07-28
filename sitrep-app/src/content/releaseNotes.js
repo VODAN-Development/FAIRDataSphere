@@ -1,4 +1,5 @@
-// Copy this shape into RELEASE_NOTES and replace the placeholder values.
+// Copy this shape into RELEASE_NOTES and replace the placeholder values when
+// adding a new visible release note.
 export const RELEASE_NOTE_TEMPLATE = {
   version: 'v0.0.0',
   date: '01-01-2026',
@@ -20,6 +21,7 @@ export const RELEASE_NOTE_TEMPLATE = {
   ],
 };
 
+// Release notes are ordered newest-first for the About page.
 export const RELEASE_NOTES = [
   {
     version: 'v0.0.3',

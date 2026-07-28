@@ -1,5 +1,6 @@
 @import './styles/theme.css';
 
+/* Global browser defaults and base interactive element styling. */
 :root {
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
@@ -37,6 +38,7 @@ h1 {
 }
 
 button {
+  /* Buttons inherit typography but use shared app surface colors by default. */
   border-radius: 8px;
   border: 1px solid var(--color-transparent);
   padding: 0.6em 1.2em;

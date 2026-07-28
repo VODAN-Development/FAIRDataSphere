@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 
 export function DynamicFieldInputs({ fields, values, onChange, disabled = false, fieldErrors = {}, onFieldErrorClear }) {
+  // Keep DOM refs by field name so backend validation messages can be surfaced
+  // through native input validity and focus/reporting behavior.
   const inputRefs = useRef(new Map());
 
   useEffect(() => {
@@ -29,6 +31,8 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
   };
 
   const updateValue = (name, value) => {
+    // Every change clears the field-specific backend error and emits a shallow
+    // copy so parent forms can keep state immutable.
     clearFieldError(name);
     onChange({ ...values, [name]: value });
   };
@@ -66,6 +70,8 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
   };
 
   const updateConditionalOption = (field, selectedOption) => {
+    // Switching options resets nested values because each option has a distinct
+    // subfield schema.
     updateValue(field.name, { selectedOption, values: {} });
   };
 
@@ -108,6 +114,8 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
   };
 
   const updateRepeatedGroupSubfield = (field, groupIndex, subfieldName, value) => {
+    // Repeated groups are arrays of objects; update by index without mutating the
+    // existing array so React detects the change.
     const currentGroups = [...(values[field.name] || [emptyGroupValue(field)])];
     currentGroups[groupIndex] = {
       ...(currentGroups[groupIndex] || {}),
@@ -246,6 +254,8 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
     onAddListSubfield,
     onRemoveListSubfield,
   }) => (
+    // Nested groups, conditionals, lists, and scalars all recurse through this
+    // renderer so imported classes and locations can be arbitrarily nested.
     (field.subfields || []).map((subfield) => (
       isGroupField(subfield) ? (
         <div key={subfield.name} className={subfield.inputType === 'import-class' ? 'imported-class-input' : 'coordinates'}>

@@ -1,3 +1,6 @@
+// Default RDF ontology and form structure used when no organisation-specific
+// structure has been saved yet. The UI can edit most fields, but generated and
+// metadata-only fields below preserve core report/report-item behavior.
 export const DEFAULT_RDF = {
   prefixes: {
     sitrep: "http://sitrep.example.org/ontology#",

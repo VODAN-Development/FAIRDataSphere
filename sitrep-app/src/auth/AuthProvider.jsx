@@ -47,6 +47,8 @@ const SIGN_OUT = gql`
 
 export function AuthProvider({ children }) {
   const apolloClient = useApolloClient();
+  // Always ask the server for /me so a refreshed page reflects the cookie-backed
+  // session instead of trusting stale client cache.
   const { data, loading, refetch } = useQuery(ME, {
     fetchPolicy: 'network-only',
     errorPolicy: 'ignore',
@@ -57,6 +59,7 @@ export function AuthProvider({ children }) {
 
   const signIn = useCallback(async ({ email, password }) => {
     const result = await signInMutation({ variables: { email, password } });
+    // The mutation sets an httpOnly cookie; refetching /me updates React state.
     await refetch();
     return result.data.signIn.user;
   }, [refetch, signInMutation]);
@@ -69,11 +72,15 @@ export function AuthProvider({ children }) {
 
   const signOut = useCallback(async () => {
     await signOutMutation();
+    // Clear GraphQL cache so organisation-scoped data from the previous user is
+    // not shown after the session cookie is removed.
     await apolloClient.clearStore();
     await refetch();
   }, [apolloClient, refetch, signOutMutation]);
 
   const value = useMemo(() => ({
+    // Memoizing keeps context consumers from re-rendering unless auth state or
+    // auth actions actually change.
     user: data?.me || null,
     loading,
     signIn,

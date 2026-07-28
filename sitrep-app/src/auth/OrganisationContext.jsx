@@ -2,6 +2,9 @@ import { useMemo, useState } from 'react';
 import { gql, useQuery } from '@apollo/client';
 import { useAuth } from './useAuth.js';
 import { OrganisationContext } from './OrganisationContextValue.js';
+
+// Persist the last selected organisation locally so repeated visits reopen the
+// same workspace when the user still has access to it.
 const ACTIVE_ORGANISATION_KEY = 'sitrep.activeOrganisationId';
 const EMPTY_ORGANISATIONS = [];
 
@@ -11,17 +14,25 @@ const GET_ACTIVE_ORGANISATIONS = gql`
       id
       name
       currentUserRole
+      currentUserPermissions {
+        appWrite
+      }
     }
     myOrganisations {
       id
       name
       currentUserRole
+      currentUserPermissions {
+        appWrite
+      }
     }
   }
 `;
 
 export function OrganisationProvider({ children }) {
   const { user } = useAuth();
+  // Admins can see all organisations; regular users are restricted to their own
+  // memberships. Both lists are fetched together so role switches are simple.
   const { data, loading, error } = useQuery(GET_ACTIVE_ORGANISATIONS, {
     skip: !user,
   });
@@ -34,6 +45,8 @@ export function OrganisationProvider({ children }) {
     : data?.myOrganisations || EMPTY_ORGANISATIONS;
 
   const activeOrganisationId = user?.role === 'admin' && !selectedOrganisationId
+    // Empty organisation ID means the admin is working against the global,
+    // unscoped repository/structure instead of a specific organisation.
     ? ''
     : user && organisations.some(organisation => organisation.id === selectedOrganisationId)
       ? selectedOrganisationId
@@ -42,6 +55,8 @@ export function OrganisationProvider({ children }) {
         : organisations[0]?.id || '';
 
   function selectOrganisation(id) {
+    // Store only explicit organisation selections; the admin unscoped mode is
+    // represented by absence of a saved ID.
     setSelectedOrganisationId(id);
     if (id) {
       localStorage.setItem(ACTIVE_ORGANISATION_KEY, id);
@@ -55,8 +70,7 @@ export function OrganisationProvider({ children }) {
     : null;
   const activeOrganisationIsUnscoped = user?.role === 'admin' && !activeOrganisationId;
   const activeOrganisationCanWrite = user?.role === 'admin'
-    || activeOrganisation?.currentUserRole === 'owner'
-    || activeOrganisation?.currentUserRole === 'member';
+    || !!activeOrganisation?.currentUserPermissions?.appWrite;
   const value = useMemo(() => ({
     activeOrganisation,
     activeOrganisationCanWrite,

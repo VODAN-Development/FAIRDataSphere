@@ -23,8 +23,7 @@ export default function OrganisationGate({ children, requireWrite = false }) {
 
   const activeOrganisation = organisations.find(organisation => organisation.id === activeOrganisationId);
   const canWrite = user?.role === 'admin'
-    || activeOrganisation?.currentUserRole === 'owner'
-    || activeOrganisation?.currentUserRole === 'member';
+    || !!activeOrganisation?.currentUserPermissions?.appWrite;
 
   return (
     <div className="organisation-gated-page">

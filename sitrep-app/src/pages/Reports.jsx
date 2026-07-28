@@ -166,6 +166,41 @@ const GET_COMPILED_REPORTS = gql`
   }
 `;
 
+const GET_REPORT_AUTOMATIONS = gql`
+  query GetReportAutomations($organisationId: ID) {
+    reportAutomations(organisationId: $organisationId) {
+      id
+      name
+      enabled
+      intervalMinutes
+      itemSelectionMode
+      selectedItemIds
+      reportFieldValues {
+        name
+        value
+      }
+      compileEnabled
+      compileItemFieldNames
+      compiledConfig {
+        organisationName
+        reportSeriesTitle
+        headerNote
+        footerText
+        accentColor
+        includeFieldLabels
+        itemFieldNames
+      }
+      nextRunAt
+      lastRunAt
+      lastReportId
+      lastCompiledReportId
+      lastRunMessage
+      createdAt
+      updatedAt
+    }
+  }
+`;
+
 const CREATE_REPORT = gql`
   mutation CreateReportFromFields($fieldValues: [RdfFieldValueInput!]!, $selectedItemIds: [Int!]!, $organisationId: ID) {
     createReportFromFields(fieldValues: $fieldValues, selectedItemIds: $selectedItemIds, organisationId: $organisationId) {
@@ -238,6 +273,35 @@ const UPDATE_COMPILED_REPORT = gql`
   }
 `;
 
+const UPSERT_REPORT_AUTOMATION = gql`
+  mutation UpsertReportAutomation($id: ID, $input: ReportAutomationInput!, $organisationId: ID) {
+    upsertReportAutomation(id: $id, input: $input, organisationId: $organisationId) {
+      id
+      nextRunAt
+      lastRunMessage
+    }
+  }
+`;
+
+const DELETE_REPORT_AUTOMATION = gql`
+  mutation DeleteReportAutomation($id: ID!, $organisationId: ID) {
+    deleteReportAutomation(id: $id, organisationId: $organisationId)
+  }
+`;
+
+const RUN_REPORT_AUTOMATION = gql`
+  mutation RunReportAutomation($id: ID!, $organisationId: ID) {
+    runReportAutomation(id: $id, organisationId: $organisationId) {
+      id
+      nextRunAt
+      lastRunAt
+      lastReportId
+      lastCompiledReportId
+      lastRunMessage
+    }
+  }
+`;
+
 const DEFAULT_COMPILED_CONFIG = {
   organisationName: 'EEPA',
   reportSeriesTitle: 'Situation Report EEPA Horn',
@@ -248,7 +312,11 @@ const DEFAULT_COMPILED_CONFIG = {
   itemFieldNames: [],
 };
 
+const DEFAULT_AUTOMATION_MODE = 'new-unreported-since-latest-report';
+
 function escapeHtml(value) {
+  // Compiled reports can be exported as standalone HTML, so user-authored text is
+  // escaped before being interpolated into templates.
   return String(value ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -268,6 +336,8 @@ function markdownInlineToHtml(value) {
 }
 
 function markdownToHtml(markdown) {
+  // Lightweight markdown support is intentionally local to compiled reports; it
+  // covers the headings, paragraphs, and inline formatting used by the editor.
   const blocks = String(markdown || '')
     .replace(/\r\n/g, '\n')
     .split(/\n{2,}/)
@@ -340,6 +410,8 @@ function reportTitleWithNumber(report) {
 }
 
 function generatedBodyMarkdown({ report, items, config, selectedItemIds, itemFieldNames }) {
+  // Start a compiled report from selected report items so users can edit from a
+  // useful draft rather than a blank document.
   const orderedItems = selectedItemIds
     .map(itemId => items.find(item => Number(item.entryNumber) === Number(itemId)))
     .filter(Boolean);
@@ -374,6 +446,8 @@ function compiledReportEditableMarkdown(compiledReport) {
 }
 
 function compiledHtmlDocument(compiledReport, config) {
+  // Produce a self-contained document that can be downloaded or printed without
+  // loading the React app.
   const accent = config.accentColor || DEFAULT_COMPILED_CONFIG.accentColor;
   return `<!doctype html>
 <html>
@@ -445,6 +519,7 @@ function printHtmlDocument(html) {
 }
 
 function compiledConfigInput(config, itemFieldNames = config.itemFieldNames || []) {
+  // Only persist the config fields accepted by the GraphQL input type.
   return {
     organisationName: config.organisationName || '',
     reportSeriesTitle: config.reportSeriesTitle || '',
@@ -456,7 +531,56 @@ function compiledConfigInput(config, itemFieldNames = config.itemFieldNames || [
   };
 }
 
+function automationValuesFromSchedule(fields, schedule) {
+  const values = formValuesFromFields(fields);
+  (schedule?.reportFieldValues || []).forEach(field => {
+    if (field.name) values[field.name] = field.value ?? '';
+  });
+  return values;
+}
+
+function defaultAutomationDraft(fields, compiledConfig) {
+  return {
+    id: '',
+    name: 'Automatic report',
+    enabled: true,
+    intervalMinutes: 1440,
+    itemSelectionMode: DEFAULT_AUTOMATION_MODE,
+    selectedItemIds: new Set(),
+    reportValues: formValuesFromFields(fields),
+    compileEnabled: true,
+    compileItemFieldNames: new Set(compiledConfig.itemFieldNames || []),
+    compiledConfig: compiledConfigInput(compiledConfig),
+    nextRunAt: null,
+    lastRunMessage: null,
+  };
+}
+
+function automationDraftFromSchedule(fields, schedule, fallbackConfig) {
+  if (!schedule) return defaultAutomationDraft(fields, fallbackConfig);
+  const config = compiledConfigInput({
+    ...fallbackConfig,
+    ...schedule.compiledConfig,
+  }, schedule.compileItemFieldNames || schedule.compiledConfig?.itemFieldNames || []);
+  return {
+    id: schedule.id,
+    name: schedule.name,
+    enabled: schedule.enabled,
+    intervalMinutes: schedule.intervalMinutes,
+    itemSelectionMode: schedule.itemSelectionMode,
+    selectedItemIds: new Set(schedule.selectedItemIds || []),
+    reportValues: automationValuesFromSchedule(fields, schedule),
+    compileEnabled: schedule.compileEnabled,
+    compileItemFieldNames: new Set(schedule.compileItemFieldNames || []),
+    compiledConfig: config,
+    nextRunAt: schedule.nextRunAt,
+    lastRunMessage: schedule.lastRunMessage,
+  };
+}
+
 export default function Reports() {
+  // Reports manages three connected workflows: report CRUD, assigning items to
+  // reports, and generating/editing compiled report documents.
   const { activeOrganisationCanWrite, activeOrganisationId, activeOrganisationIsUnscoped } = useOrganisationContext();
   const [selectedItems, setSelectedItems] = useState(new Set());
   const [formData, setFormData] = useState({});
@@ -472,6 +596,8 @@ export default function Reports() {
   const [compiledConfigDraft, setCompiledConfigDraft] = useState(DEFAULT_COMPILED_CONFIG);
   const [selectedCompiledReportId, setSelectedCompiledReportId] = useState('');
   const [compiledEditDraft, setCompiledEditDraft] = useState(null);
+  const [selectedAutomationId, setSelectedAutomationId] = useState('');
+  const [automationDraft, setAutomationDraft] = useState(null);
 
   const queryVariables = { organisationId: activeOrganisationId };
   const refetchScopedQueries = [
@@ -479,6 +605,7 @@ export default function Reports() {
     { query: GET_REPORT_ITEMS, variables: queryVariables },
     { query: GET_COMPILED_REPORTS, variables: queryVariables },
     { query: GET_COMPILED_REPORT_CONFIG, variables: queryVariables },
+    { query: GET_REPORT_AUTOMATIONS, variables: queryVariables },
   ];
   const { data: structureData, loading: structureLoading, error: structureError } = useQuery(GET_RDF_STRUCTURE, {
     variables: queryVariables,
@@ -497,6 +624,10 @@ export default function Reports() {
     skip: !activeOrganisationId && !activeOrganisationIsUnscoped,
   });
   const { data: compiledReportsData, loading: compiledReportsLoading, error: compiledReportsError, refetch: refetchCompiledReports } = useQuery(GET_COMPILED_REPORTS, {
+    variables: queryVariables,
+    skip: !activeOrganisationId && !activeOrganisationIsUnscoped,
+  });
+  const { data: automationsData, loading: automationsLoading, error: automationsError, refetch: refetchAutomations } = useQuery(GET_REPORT_AUTOMATIONS, {
     variables: queryVariables,
     skip: !activeOrganisationId && !activeOrganisationIsUnscoped,
   });
@@ -524,17 +655,32 @@ export default function Reports() {
   const [updateCompiledReport] = useMutation(UPDATE_COMPILED_REPORT, {
     refetchQueries: refetchScopedQueries
   });
+  const [upsertReportAutomation] = useMutation(UPSERT_REPORT_AUTOMATION, {
+    refetchQueries: refetchScopedQueries
+  });
+  const [deleteReportAutomation] = useMutation(DELETE_REPORT_AUTOMATION, {
+    refetchQueries: refetchScopedQueries
+  });
+  const [runReportAutomation] = useMutation(RUN_REPORT_AUTOMATION, {
+    refetchQueries: refetchScopedQueries
+  });
 
   const fields = useMemo(() => structureData?.rdfStructure?.reportFields || [], [structureData]);
   const initializedForm = useMemo(() => {
     return Object.fromEntries(fields.map(field => [field.name, formData[field.name] ?? emptyValueFor(field)]));
   }, [fields, formData]);
+  const reportItems = useMemo(() => itemsData?.reportItems || [], [itemsData]);
+  const reports = useMemo(() => reportsData?.reports || [], [reportsData]);
+  const compiledReports = useMemo(() => compiledReportsData?.compiledReports || [], [compiledReportsData]);
+  const automations = useMemo(() => automationsData?.reportAutomations || [], [automationsData]);
+  const compiledConfig = compiledConfigDraft || compiledConfigData?.compiledReportConfig || DEFAULT_COMPILED_CONFIG;
 
   useEffect(() => {
     const handler = () => {
       refetchItems();
       refetchReports();
       refetchCompiledReports();
+      refetchAutomations();
     };
     window.addEventListener('reportsUpdated', handler);
     const storageHandler = (e) => {
@@ -545,7 +691,7 @@ export default function Reports() {
       window.removeEventListener('reportsUpdated', handler);
       window.removeEventListener('storage', storageHandler);
     };
-  }, [refetchItems, refetchReports, refetchCompiledReports]);
+  }, [refetchItems, refetchReports, refetchCompiledReports, refetchAutomations]);
 
   useEffect(() => {
     if (compiledConfigData?.compiledReportConfig) {
@@ -558,10 +704,18 @@ export default function Reports() {
     }
   }, [compiledConfigData]);
 
-  const reportItems = useMemo(() => itemsData?.reportItems || [], [itemsData]);
-  const reports = useMemo(() => reportsData?.reports || [], [reportsData]);
-  const compiledReports = useMemo(() => compiledReportsData?.compiledReports || [], [compiledReportsData]);
-  const compiledConfig = compiledConfigDraft || compiledConfigData?.compiledReportConfig || DEFAULT_COMPILED_CONFIG;
+  useEffect(() => {
+    if (!fields.length) return;
+    const selectedAutomation = automations.find(schedule => String(schedule.id) === String(selectedAutomationId))
+      || automations[0]
+      || null;
+    if (selectedAutomation) {
+      setSelectedAutomationId(selectedAutomation.id);
+      setAutomationDraft(automationDraftFromSchedule(fields, selectedAutomation, compiledConfig));
+    } else if (!automationDraft) {
+      setAutomationDraft(defaultAutomationDraft(fields, compiledConfig));
+    }
+  }, [automations, compiledConfig, fields, selectedAutomationId]);
   const selectedReport = !isCreatingReport
     ? reports.find(report => String(report.id) === String(selectedReportId)) || reports[0] || null
     : null;
@@ -577,8 +731,16 @@ export default function Reports() {
     }));
     return Array.from(fieldsByName.values());
   }, [selectedReportItems]);
-  const gqlError = structureError || itemsError || reportsError || compiledConfigError || compiledReportsError;
-  const loading = structureLoading || itemsLoading || reportsLoading || compiledConfigLoading || compiledReportsLoading;
+  const allItemFieldOptions = useMemo(() => {
+    const fieldsByName = new Map();
+    reportItems.forEach(item => item.fieldValues.forEach(field => {
+      if (!field.name || fieldsByName.has(field.name)) return;
+      fieldsByName.set(field.name, { name: field.name, label: field.label || field.name });
+    }));
+    return Array.from(fieldsByName.values());
+  }, [reportItems]);
+  const gqlError = structureError || itemsError || reportsError || compiledConfigError || compiledReportsError || automationsError;
+  const loading = structureLoading || itemsLoading || reportsLoading || compiledConfigLoading || compiledReportsLoading || automationsLoading;
   const compiledReportsForSelectedReport = useMemo(() => {
     if (!selectedReport) return [];
     return compiledReports.filter(report => String(report.sourceReportId) === String(selectedReport.id));
@@ -678,6 +840,87 @@ export default function Reports() {
       else next.add(fieldName);
       return next;
     });
+  };
+
+  const toggleAutomationItem = (itemId) => {
+    const numericItemId = Number(itemId);
+    setAutomationDraft(current => {
+      const next = new Set(current.selectedItemIds || []);
+      if (next.has(numericItemId)) next.delete(numericItemId);
+      else next.add(numericItemId);
+      return { ...current, selectedItemIds: next };
+    });
+  };
+
+  const toggleAutomationCompileField = (fieldName) => {
+    setAutomationDraft(current => {
+      const next = new Set(current.compileItemFieldNames || []);
+      if (next.has(fieldName)) next.delete(fieldName);
+      else next.add(fieldName);
+      return { ...current, compileItemFieldNames: next };
+    });
+  };
+
+  const newAutomationDraft = () => {
+    setSelectedAutomationId('');
+    setAutomationDraft(defaultAutomationDraft(fields, compiledConfig));
+  };
+
+  const handleSaveAutomation = async (event) => {
+    event.preventDefault();
+    if (!automationDraft) return;
+    try {
+      setError('');
+      const input = {
+        name: automationDraft.name,
+        enabled: !!automationDraft.enabled,
+        intervalMinutes: Number(automationDraft.intervalMinutes) || 1440,
+        itemSelectionMode: automationDraft.itemSelectionMode,
+        selectedItemIds: automationDraft.itemSelectionMode === 'manual'
+          ? Array.from(automationDraft.selectedItemIds || [])
+          : [],
+        reportFieldValues: fieldInputsPayload(fields, automationDraft.reportValues || {}),
+        compileEnabled: !!automationDraft.compileEnabled,
+        compileItemFieldNames: Array.from(automationDraft.compileItemFieldNames || []),
+        compiledConfig: compiledConfigInput(automationDraft.compiledConfig || compiledConfig, Array.from(automationDraft.compileItemFieldNames || [])),
+      };
+      const result = await upsertReportAutomation({
+        variables: {
+          id: automationDraft.id || null,
+          input,
+          organisationId: activeOrganisationId,
+        },
+      });
+      setSelectedAutomationId(result.data.upsertReportAutomation.id);
+      await refetchAutomations();
+    } catch (err) {
+      setError('Error saving report automation: ' + err.message);
+    }
+  };
+
+  const handleDeleteAutomation = async () => {
+    if (!automationDraft?.id || !window.confirm('Delete this report automation?')) return;
+    try {
+      setError('');
+      await deleteReportAutomation({ variables: { id: automationDraft.id, organisationId: activeOrganisationId } });
+      setSelectedAutomationId('');
+      setAutomationDraft(defaultAutomationDraft(fields, compiledConfig));
+      await refetchAutomations();
+    } catch (err) {
+      setError('Error deleting report automation: ' + err.message);
+    }
+  };
+
+  const handleRunAutomation = async () => {
+    if (!automationDraft?.id) return;
+    try {
+      setError('');
+      await runReportAutomation({ variables: { id: automationDraft.id, organisationId: activeOrganisationId } });
+      notifyReportsUpdated();
+      await refetchAutomations();
+    } catch (err) {
+      setError('Error running report automation: ' + err.message);
+    }
   };
 
   const handleSaveCompiledConfig = async () => {
@@ -859,6 +1102,233 @@ export default function Reports() {
     return reportItems.find(item => Number(item.entryNumber) === Number(itemId));
   };
 
+  function renderAutomationPanel() {
+    if (!activeOrganisationCanWrite || !automationDraft) return null;
+    return (
+      <div className="compiled-report-panel report-automation-panel">
+        <div className="compiled-report-panel-header">
+          <div>
+            <h4>Automatic reports</h4>
+            {automationDraft.lastRunMessage && <p>{automationDraft.lastRunMessage}</p>}
+          </div>
+          <div className="item-actions">
+            <button type="button" className="secondary-btn" onClick={newAutomationDraft}>
+              New automation
+            </button>
+            {automationDraft.id && (
+              <button type="button" className="create-report-button" onClick={handleRunAutomation} disabled={loading}>
+                Run now
+              </button>
+            )}
+          </div>
+        </div>
+
+        {automations.length > 0 && (
+          <div className="compiled-report-list automation-list">
+            {automations.map(schedule => (
+              <button
+                key={schedule.id}
+                type="button"
+                className={String(schedule.id) === String(automationDraft.id) ? 'selected' : ''}
+                onClick={() => {
+                  setSelectedAutomationId(schedule.id);
+                  setAutomationDraft(automationDraftFromSchedule(fields, schedule, compiledConfig));
+                }}
+              >
+                <strong>{schedule.name}</strong>
+                <span>{schedule.enabled ? `Next: ${formatTimestamp(schedule.nextRunAt)}` : 'Disabled'}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <form className="report-automation-form" onSubmit={handleSaveAutomation}>
+          <div className="compiled-config-grid">
+            <label>
+              Name
+              <input
+                value={automationDraft.name}
+                onChange={(event) => setAutomationDraft({ ...automationDraft, name: event.target.value })}
+                required
+              />
+            </label>
+            <label>
+              Interval
+              <select
+                value={automationDraft.intervalMinutes}
+                onChange={(event) => setAutomationDraft({ ...automationDraft, intervalMinutes: Number(event.target.value) })}
+              >
+                <option value={60}>Hourly</option>
+                <option value={360}>Every 6 hours</option>
+                <option value={720}>Every 12 hours</option>
+                <option value={1440}>Daily</option>
+                <option value={10080}>Weekly</option>
+              </select>
+            </label>
+            <label>
+              Items
+              <select
+                value={automationDraft.itemSelectionMode}
+                onChange={(event) => setAutomationDraft({ ...automationDraft, itemSelectionMode: event.target.value })}
+              >
+                <option value={DEFAULT_AUTOMATION_MODE}>New unreported items since latest report</option>
+                <option value="manual">Selected items</option>
+              </select>
+            </label>
+            <label className="compiled-toggle">
+              <input
+                type="checkbox"
+                checked={automationDraft.enabled}
+                onChange={(event) => setAutomationDraft({ ...automationDraft, enabled: event.target.checked })}
+              />
+              Enabled
+            </label>
+          </div>
+
+          <div className="report-automation-section">
+            <strong>Report parameters</strong>
+            <DynamicFieldInputs
+              fields={fields}
+              values={automationDraft.reportValues}
+              onChange={(values) => setAutomationDraft({ ...automationDraft, reportValues: values })}
+              disabled={loading}
+              fieldErrors={fieldErrors}
+              onFieldErrorClear={(name) => setFieldErrors(current => {
+                const next = { ...current };
+                delete next[name];
+                return next;
+              })}
+            />
+          </div>
+
+          {automationDraft.itemSelectionMode === 'manual' && (
+            <div className="report-automation-section">
+              <strong>Report items</strong>
+              <div className="compiled-checkbox-list">
+                {reportItems.map(item => (
+                  <label key={item.entryNumber} className="compiled-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={automationDraft.selectedItemIds.has(Number(item.entryNumber))}
+                      onChange={() => toggleAutomationItem(item.entryNumber)}
+                    />
+                    {itemTitle(item)}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <label className="compiled-toggle">
+            <input
+              type="checkbox"
+              checked={automationDraft.compileEnabled}
+              onChange={(event) => setAutomationDraft({ ...automationDraft, compileEnabled: event.target.checked })}
+            />
+            Compile report after creation
+          </label>
+
+          {automationDraft.compileEnabled && (
+            <>
+              <div className="compiled-config-grid">
+                <label>
+                  Organisation
+                  <input
+                    value={automationDraft.compiledConfig.organisationName || ''}
+                    onChange={(event) => setAutomationDraft({
+                      ...automationDraft,
+                      compiledConfig: { ...automationDraft.compiledConfig, organisationName: event.target.value },
+                    })}
+                  />
+                </label>
+                <label>
+                  Series title
+                  <input
+                    value={automationDraft.compiledConfig.reportSeriesTitle || ''}
+                    onChange={(event) => setAutomationDraft({
+                      ...automationDraft,
+                      compiledConfig: { ...automationDraft.compiledConfig, reportSeriesTitle: event.target.value },
+                    })}
+                  />
+                </label>
+                <label>
+                  Header note
+                  <input
+                    value={automationDraft.compiledConfig.headerNote || ''}
+                    onChange={(event) => setAutomationDraft({
+                      ...automationDraft,
+                      compiledConfig: { ...automationDraft.compiledConfig, headerNote: event.target.value },
+                    })}
+                  />
+                </label>
+                <label>
+                  Accent
+                  <input
+                    type="color"
+                    value={automationDraft.compiledConfig.accentColor || DEFAULT_COMPILED_CONFIG.accentColor}
+                    onChange={(event) => setAutomationDraft({
+                      ...automationDraft,
+                      compiledConfig: { ...automationDraft.compiledConfig, accentColor: event.target.value },
+                    })}
+                  />
+                </label>
+                <label className="compiled-config-wide">
+                  Footer
+                  <input
+                    value={automationDraft.compiledConfig.footerText || ''}
+                    onChange={(event) => setAutomationDraft({
+                      ...automationDraft,
+                      compiledConfig: { ...automationDraft.compiledConfig, footerText: event.target.value },
+                    })}
+                  />
+                </label>
+              </div>
+
+              <label className="compiled-toggle">
+                <input
+                  type="checkbox"
+                  checked={!!automationDraft.compiledConfig.includeFieldLabels}
+                  onChange={(event) => setAutomationDraft({
+                    ...automationDraft,
+                    compiledConfig: { ...automationDraft.compiledConfig, includeFieldLabels: event.target.checked },
+                  })}
+                />
+                Show field labels in compiled item details
+              </label>
+
+              <div className="report-automation-section">
+                <strong>Compiled item fields</strong>
+                <div className="compiled-checkbox-list">
+                  {allItemFieldOptions.map(field => (
+                    <label key={field.name} className="compiled-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={automationDraft.compileItemFieldNames.has(field.name)}
+                        onChange={() => toggleAutomationCompileField(field.name)}
+                      />
+                      {field.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+
+          <div className="item-actions">
+            <button type="submit" className="generate-btn" disabled={loading}>
+              Save automation
+            </button>
+            {automationDraft.id && (
+              <button type="button" className="delete-btn" onClick={handleDeleteAutomation} disabled={loading}>
+                Delete
+              </button>
+            )}
+          </div>
+        </form>
+      </div>
+    );
+  }
+
   return (
     <OrganisationGate>
     <div className="settings-page">
@@ -915,6 +1385,7 @@ export default function Reports() {
         </aside>
 
         <main className="rdf-field-pane report-detail-pane">
+          {renderAutomationPanel()}
           {isCreatingReport ? (
             <div className="report-creation-section report-detail-surface">
               <div className="rdf-field-pane-header">

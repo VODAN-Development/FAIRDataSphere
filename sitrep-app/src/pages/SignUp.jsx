@@ -3,6 +3,8 @@ import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth.js';
 
 export default function SignUp() {
+  // Sign-up immediately creates a session through the same auth context used by
+  // login, then sends the new user into the app.
   const { user, signUp } = useAuth();
   const navigate = useNavigate();
   const [name, setName] = useState('');
@@ -16,6 +18,8 @@ export default function SignUp() {
   }
 
   async function handleSubmit(event) {
+    // AuthProvider refetches /me after sign-up so protected routes see the new
+    // user before navigation completes.
     event.preventDefault();
     setError('');
     setSubmitting(true);
