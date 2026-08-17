@@ -664,6 +664,17 @@ nav a button {
   background-color: var(--color-surface-raised);
 }
 
+.data-import-form h4 {
+  margin: 0;
+  color: var(--color-heading);
+  font-size: 1rem;
+}
+
+.data-structure-import-form {
+  border-color: var(--color-secondary);
+  background-color: var(--color-surface);
+}
+
 .data-import-template-actions {
   display: flex;
   flex-wrap: wrap;
@@ -718,6 +729,212 @@ nav a button {
 
 .data-import-file span {
   color: var(--color-on-surface-muted);
+}
+
+.data-import-summary {
+  padding: 0.75rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 6px;
+  background-color: var(--color-accent-container);
+  color: var(--color-on-surface);
+  font-weight: 700;
+}
+
+.data-structure-review {
+  display: grid;
+  gap: 1rem;
+  width: 100%;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--color-border-muted);
+  border-radius: 8px;
+  background-color: var(--color-surface-raised);
+}
+
+.data-structure-review-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--color-border-soft);
+}
+
+.data-structure-review-header h4,
+.data-structure-review-header p {
+  margin: 0;
+}
+
+.data-structure-review-header p {
+  margin-top: 0.25rem;
+  color: var(--color-on-surface-muted);
+}
+
+.data-structure-review-grid {
+  display: grid;
+  grid-template-columns: minmax(11rem, 14rem) minmax(0, 1fr) minmax(13rem, 16rem);
+  gap: 1rem;
+  min-width: 0;
+}
+
+.data-structure-tabs {
+  display: grid;
+  align-content: start;
+  gap: 0.4rem;
+}
+
+.data-structure-tabs button {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.55rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 6px;
+  background-color: var(--color-surface);
+  color: var(--color-on-surface);
+  cursor: pointer;
+  text-align: left;
+}
+
+.data-structure-tabs button.active {
+  border-color: var(--color-primary);
+  background-color: var(--color-accent-container);
+}
+
+.data-structure-tabs span {
+  color: var(--color-on-surface-muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.data-structure-editor {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.data-structure-class-editor {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.data-structure-class-editor label,
+.data-structure-field-row label {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  color: var(--color-on-surface-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.data-structure-class-editor input,
+.data-structure-class-editor select,
+.data-structure-field-row input,
+.data-structure-field-row select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 4px;
+  background-color: var(--color-surface);
+  color: var(--color-on-surface);
+}
+
+.data-structure-source-note {
+  padding: 0.55rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 6px;
+  background-color: var(--color-surface);
+  color: var(--color-on-surface-muted);
+  font-size: 0.85rem;
+}
+
+.data-structure-field-table {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.data-structure-field-row {
+  display: grid;
+  grid-template-columns: 3.4rem 5.2rem minmax(8rem, 1.15fr) minmax(8rem, 1fr) 6.5rem minmax(7rem, 0.85fr);
+  gap: 0.45rem;
+  align-items: start;
+  min-width: 0;
+  padding: 0.45rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 6px;
+  background-color: var(--color-surface);
+}
+
+.data-structure-field-row.header {
+  color: var(--color-on-surface-muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.data-structure-field-row.disabled {
+  opacity: 0.58;
+}
+
+.data-structure-field-row small {
+  color: var(--color-on-surface-muted);
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+}
+
+.data-structure-visual {
+  display: grid;
+  align-content: start;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.data-structure-visual > div {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.7rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 8px;
+  background-color: var(--color-surface);
+}
+
+.data-structure-visual > div.active {
+  border-color: var(--color-primary);
+  background-color: var(--color-accent-container);
+}
+
+.data-structure-visual strong,
+.data-structure-visual span,
+.data-structure-visual li {
+  overflow-wrap: anywhere;
+}
+
+.data-structure-visual span {
+  color: var(--color-on-surface-muted);
+  font-size: 0.76rem;
+}
+
+.data-structure-visual ul {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding-left: 1rem;
+}
+
+.data-structure-visual li {
+  color: var(--color-on-surface);
+  font-size: 0.82rem;
+}
+
+.data-structure-visual em {
+  color: var(--color-primary);
+  font-style: normal;
+  font-weight: 700;
 }
 
 .about-browser-window {

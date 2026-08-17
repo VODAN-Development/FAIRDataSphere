@@ -69,6 +69,14 @@ const CREATE_RDF_ENTITY = gql`
   }
 `;
 
+const UPDATE_RDF_STRUCTURE = gql`
+  mutation UpdateRdfStructureFromImport($json: String!, $organisationId: ID) {
+    updateRdfStructure(json: $json, organisationId: $organisationId) {
+      json
+    }
+  }
+`;
+
 const groupPropertyNames = new Set(['label', 'predicate', 'inputType', 'required', 'resourceMode', 'className', 'targetEntityType', 'targetClass', 'targetTemplate', 'targetLabelField']);
 
 function groupSubfieldEntries(group = {}) {
@@ -131,6 +139,39 @@ function safeFilename(value, fallback) {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     || fallback;
+}
+
+function nameFromLabel(label, fallback = 'field') {
+  const words = String(label || '')
+    .trim()
+    .replace(/[^A-Za-z0-9]+/g, ' ')
+    .split(' ')
+    .filter(Boolean);
+  if (words.length === 0) return fallback;
+  const name = words
+    .map((word, index) => {
+      const normalized = word.charAt(0).toUpperCase() + word.slice(1);
+      return index === 0 ? normalized.charAt(0).toLowerCase() + normalized.slice(1) : normalized;
+    })
+    .join('');
+  return /^[A-Za-z_]/.test(name) ? name : `${fallback}${name.charAt(0).toUpperCase()}${name.slice(1)}`;
+}
+
+function capitalizeLocalName(name) {
+  const value = String(name || '');
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function uniqueName(baseName, usedNames, fallback = 'field') {
+  const normalized = nameFromLabel(baseName, fallback);
+  let candidate = normalized;
+  let index = 2;
+  while (usedNames.has(candidate)) {
+    candidate = `${normalized}${index}`;
+    index += 1;
+  }
+  usedNames.add(candidate);
+  return candidate;
 }
 
 function downloadBlob(filename, blob) {
@@ -407,11 +448,427 @@ function dataTemplateXlsxBlob(templateFields) {
   return new Blob([zipFiles(workbookFiles(sheets))], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 }
 
+function readUint16(bytes, offset) {
+  return bytes[offset] | (bytes[offset + 1] << 8);
+}
+
+function readUint32(bytes, offset) {
+  return (bytes[offset]
+    | (bytes[offset + 1] << 8)
+    | (bytes[offset + 2] << 16)
+    | (bytes[offset + 3] << 24)) >>> 0;
+}
+
+async function inflateZipEntry(bytes) {
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('Compressed XLSX files are not supported in this browser.');
+  }
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function unzipXlsxFiles(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  const decoder = new TextDecoder();
+  const files = new Map();
+  let offset = 0;
+
+  while (offset + 30 <= bytes.length && readUint32(bytes, offset) === 0x04034b50) {
+    const compressionMethod = readUint16(bytes, offset + 8);
+    const compressedSize = readUint32(bytes, offset + 18);
+    const fileNameLength = readUint16(bytes, offset + 26);
+    const extraLength = readUint16(bytes, offset + 28);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + fileNameLength + extraLength;
+    const dataEnd = dataStart + compressedSize;
+    const name = decoder.decode(bytes.slice(nameStart, nameStart + fileNameLength)).replace(/\\/g, '/');
+    const compressedBytes = bytes.slice(dataStart, dataEnd);
+    let fileBytes;
+
+    if (compressionMethod === 0) {
+      fileBytes = compressedBytes;
+    } else if (compressionMethod === 8) {
+      fileBytes = await inflateZipEntry(compressedBytes);
+    } else {
+      throw new Error(`Unsupported XLSX compression method: ${compressionMethod}.`);
+    }
+
+    files.set(name, decoder.decode(fileBytes));
+    offset = dataEnd;
+  }
+
+  return files;
+}
+
+function workbookSheetMap(files) {
+  const workbook = new DOMParser().parseFromString(files.get('xl/workbook.xml') || '', 'application/xml');
+  const relationships = new DOMParser().parseFromString(files.get('xl/_rels/workbook.xml.rels') || '', 'application/xml');
+  const targetsById = new Map(Array.from(relationships.getElementsByTagNameNS('*', 'Relationship')).map(relationship => [
+    relationship.getAttribute('Id'),
+    relationship.getAttribute('Target') || '',
+  ]));
+
+  return new Map(Array.from(workbook.getElementsByTagNameNS('*', 'sheet')).map(sheet => {
+    const target = targetsById.get(sheet.getAttribute('r:id')) || '';
+    const path = target.startsWith('xl/') ? target : `xl/${target.replace(/^\//, '')}`;
+    return [sheet.getAttribute('name'), path];
+  }));
+}
+
+function sharedStringsFromFiles(files) {
+  const sharedStringsXml = files.get('xl/sharedStrings.xml');
+  if (!sharedStringsXml) return [];
+  const sharedStrings = new DOMParser().parseFromString(sharedStringsXml, 'application/xml');
+  return Array.from(sharedStrings.getElementsByTagNameNS('*', 'si')).map(item => item.textContent || '');
+}
+
+function columnIndexFromReference(reference) {
+  const letters = String(reference || '').match(/^[A-Z]+/i)?.[0] || '';
+  return [...letters.toUpperCase()].reduce((index, letter) => (index * 26) + letter.charCodeAt(0) - 64, 0) - 1;
+}
+
+function rowsFromWorksheetXml(xml, sharedStrings = []) {
+  const worksheet = new DOMParser().parseFromString(xml || '', 'application/xml');
+  return Array.from(worksheet.getElementsByTagNameNS('*', 'row')).map(row => (
+    Array.from(row.getElementsByTagNameNS('*', 'c')).reduce((cells, cell) => {
+      const columnIndex = Math.max(0, columnIndexFromReference(cell.getAttribute('r')));
+      const rawValue = cell.textContent || '';
+      cells[columnIndex] = cell.getAttribute('t') === 's'
+        ? sharedStrings[Number(rawValue)] || ''
+        : rawValue;
+      return cells;
+    }, [])
+  ).map(row => row.map(value => value ?? '')));
+}
+
+function parseCsvRows(text) {
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (quoted) {
+      if (char === '"' && next === '"') {
+        cell += '"';
+        index += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        cell += char;
+      }
+    } else if (char === '"') {
+      quoted = true;
+    } else if (char === ',') {
+      row.push(cell);
+      cell = '';
+    } else if (char === '\n') {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+    } else if (char !== '\r') {
+      cell += char;
+    }
+  }
+
+  row.push(cell);
+  rows.push(row);
+  return rows.filter(csvRow => csvRow.some(value => String(value || '').trim()));
+}
+
+function objectRowsFromJson(value) {
+  if (Array.isArray(value)) return value.filter(item => item && typeof item === 'object' && !Array.isArray(item));
+  if (value && typeof value === 'object') return [value];
+  return [];
+}
+
+function tablesFromJson(value, filename) {
+  if (Array.isArray(value)) return [{ name: safeFilename(filename.replace(/\.json$/i, ''), 'importedData'), rows: rowsFromObjects(objectRowsFromJson(value)) }];
+  if (!value || typeof value !== 'object') return [];
+
+  const arrayTables = Object.entries(value)
+    .filter(([, tableValue]) => Array.isArray(tableValue))
+    .map(([name, tableValue]) => ({ name, rows: rowsFromObjects(objectRowsFromJson(tableValue)) }))
+    .filter(table => table.rows.length > 0);
+  if (arrayTables.length > 0) return arrayTables;
+  return [{ name: safeFilename(filename.replace(/\.json$/i, ''), 'importedData'), rows: rowsFromObjects(objectRowsFromJson(value)) }];
+}
+
+function rowsFromObjects(objects) {
+  const keys = [];
+  const keySet = new Set();
+  objects.forEach(object => {
+    Object.keys(object || {}).forEach(key => {
+      if (!keySet.has(key)) {
+        keySet.add(key);
+        keys.push(key);
+      }
+    });
+  });
+  return [
+    keys,
+    ...objects.map(object => keys.map(key => {
+      const value = object?.[key];
+      return value && typeof value === 'object' ? JSON.stringify(value) : value ?? '';
+    })),
+  ];
+}
+
+async function tablesFromXlsx(file) {
+  const files = await unzipXlsxFiles(await file.arrayBuffer());
+  const sheets = workbookSheetMap(files);
+  const sharedStrings = sharedStringsFromFiles(files);
+  return Array.from(sheets.entries())
+    .map(([name, path]) => ({ name, rows: rowsFromWorksheetXml(files.get(path), sharedStrings) }))
+    .filter(table => table.rows.some(row => row.some(value => String(value || '').trim())));
+}
+
+async function tablesFromImportFile(file) {
+  const lowerName = file.name.toLowerCase();
+  if (lowerName.endsWith('.xlsx')) return tablesFromXlsx(file);
+  if (lowerName.endsWith('.csv')) return [{ name: file.name.replace(/\.csv$/i, '') || 'Imported data', rows: parseCsvRows(await file.text()) }];
+  if (lowerName.endsWith('.json')) return tablesFromJson(JSON.parse(await file.text()), file.name);
+  throw new Error('Choose a .json, .csv, or .xlsx file.');
+}
+
+function inferHeaderIndex(rows) {
+  const limit = Math.min(rows.length, 25);
+  let bestIndex = -1;
+  let bestScore = 0;
+  for (let index = 0; index < limit; index += 1) {
+    const score = (rows[index] || []).filter(value => String(value || '').trim()).length;
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
+  }
+  return bestScore > 0 ? bestIndex : -1;
+}
+
+function inferFieldType(label, values) {
+  const lowerLabel = String(label || '').toLowerCase();
+  const samples = values.map(value => String(value ?? '').trim()).filter(Boolean).slice(0, 100);
+  if (/\bdate\b|^date | date$|time/.test(lowerLabel)) return { inputType: 'date', datatype: 'xsd:date' };
+  if (samples.length > 0 && samples.every(value => /^-?\d+$/.test(value))) {
+    return { inputType: 'number', datatype: 'xsd:integer', parse: 'int' };
+  }
+  if (samples.length > 0 && samples.every(value => /^-?\d+([.,]\d+)?$/.test(value))) {
+    return { inputType: 'number', datatype: 'xsd:decimal' };
+  }
+  if (samples.some(value => value.length > 140) || /paragraph|reported|description|context|comment|source/.test(lowerLabel)) {
+    return { inputType: 'textarea', datatype: 'xsd:string' };
+  }
+  return { inputType: 'text', datatype: 'xsd:string' };
+}
+
+function classForEntity(entityType) {
+  return `sitrep:${capitalizeLocalName(entityType)}`;
+}
+
+function uriTemplateForEntity(entityType) {
+  return `resource:${capitalizeLocalName(entityType)}_{id}`;
+}
+
+function generatedIdField(entityType) {
+  return {
+    predicate: `sitrep:${entityType}Id`,
+    datatype: 'xsd:integer',
+    required: true,
+    parse: 'int',
+    generated: true,
+    label: 'ID',
+    inputType: 'number',
+  };
+}
+
+function structureFromTables(tables, baseStructure = {}) {
+  const classes = {};
+  const uriTemplates = {};
+  const nextStructure = {
+    prefixes: {
+      sitrep: 'http://sitrep.example.org/ontology#',
+      resource: 'http://sitrep.example.org/resource/',
+      xsd: 'http://www.w3.org/2001/XMLSchema#',
+      rdf: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
+      rdfs: 'http://www.w3.org/2000/01/rdf-schema#',
+      owl: 'http://www.w3.org/2002/07/owl#',
+      hds: 'http://example.org/hds#',
+      ...(baseStructure?.prefixes || {}),
+    },
+    classes,
+    uriTemplates,
+    equivalentClasses: {},
+    classProperties: [],
+  };
+  const entityNames = new Set();
+
+  tables.forEach((table, tableIndex) => {
+    const headerIndex = inferHeaderIndex(table.rows);
+    if (headerIndex < 0) return;
+    const header = table.rows[headerIndex] || [];
+    const dataRows = table.rows.slice(headerIndex + 1);
+    const entityType = uniqueName(table.name || `Imported data ${tableIndex + 1}`, entityNames, 'importedClass');
+    const fieldNames = new Set(['id']);
+    const fields = {
+      id: generatedIdField(entityType),
+    };
+
+    header.forEach((label, columnIndex) => {
+      const cleanLabel = String(label || '').trim();
+      if (!cleanLabel) return;
+      const fieldName = uniqueName(cleanLabel, fieldNames, 'field');
+      const inferred = inferFieldType(cleanLabel, dataRows.map(row => row[columnIndex]));
+      fields[fieldName] = {
+        predicate: `sitrep:${fieldName}`,
+        label: cleanLabel,
+        required: false,
+        ...inferred,
+      };
+    });
+
+    if (Object.keys(fields).length <= 1) return;
+    classes[entityType] = classForEntity(entityType);
+    uriTemplates[entityType] = uriTemplateForEntity(entityType);
+    nextStructure[entityType] = {
+      idField: 'id',
+      fields,
+    };
+  });
+
+  return nextStructure;
+}
+
+function draftFromTables(tables, filename) {
+  const entityNames = new Set();
+  return {
+    filename,
+    tabs: tables.map((table, tableIndex) => {
+      const headerIndex = inferHeaderIndex(table.rows);
+      if (headerIndex < 0) return null;
+      const header = table.rows[headerIndex] || [];
+      const dataRows = table.rows.slice(headerIndex + 1);
+      const entityType = uniqueName(table.name || `Imported data ${tableIndex + 1}`, entityNames, 'importedClass');
+      const fieldNames = new Set(['id']);
+      const fields = header.map((label, columnIndex) => {
+        const cleanLabel = String(label || '').trim();
+        if (!cleanLabel) return null;
+        const fieldName = uniqueName(cleanLabel, fieldNames, 'field');
+        const inferred = inferFieldType(cleanLabel, dataRows.map(row => row[columnIndex]));
+        return {
+          id: `${tableIndex}-${columnIndex}-${fieldName}`,
+          sourceColumn: columnName(columnIndex),
+          role: 'field',
+          enabled: true,
+          label: cleanLabel,
+          name: fieldName,
+          predicate: `sitrep:${fieldName}`,
+          inputType: inferred.inputType || 'text',
+          datatype: inferred.datatype || 'xsd:string',
+          parse: inferred.parse || '',
+          linkTargetEntityType: '',
+          sampleValues: dataRows
+            .map(row => String(row[columnIndex] ?? '').trim())
+            .filter(Boolean)
+            .slice(0, 3),
+        };
+      }).filter(Boolean);
+      return {
+        id: `${tableIndex}-${entityType}`,
+        sourceName: table.name || `Sheet ${tableIndex + 1}`,
+        headerRowNumber: headerIndex + 1,
+        dataRowCount: dataRows.filter(row => row.some(value => String(value || '').trim())).length,
+        enabled: fields.length > 0,
+        rowRole: 'instances',
+        entityType,
+        classIri: classForEntity(entityType),
+        uriTemplate: uriTemplateForEntity(entityType),
+        fields,
+      };
+    }).filter(Boolean),
+  };
+}
+
+function draftStats(draft) {
+  const classCount = (draft?.tabs || []).filter(tab => tab.enabled).length;
+  const fieldCount = (draft?.tabs || []).reduce((total, tab) => (
+    total + (tab.enabled ? tab.fields.filter(field => field.enabled && field.role === 'field').length : 0)
+  ), 0);
+  return { classCount, fieldCount };
+}
+
+function structureFromDraft(draft, baseStructure = {}) {
+  const classes = {};
+  const uriTemplates = {};
+  const classProperties = [];
+  const nextStructure = {
+    prefixes: {
+      sitrep: 'http://sitrep.example.org/ontology#',
+      resource: 'http://sitrep.example.org/resource/',
+      xsd: 'http://www.w3.org/2001/XMLSchema#',
+      rdf: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
+      rdfs: 'http://www.w3.org/2000/01/rdf-schema#',
+      owl: 'http://www.w3.org/2002/07/owl#',
+      hds: 'http://example.org/hds#',
+      ...(baseStructure?.prefixes || {}),
+    },
+    classes,
+    uriTemplates,
+    equivalentClasses: {},
+    classProperties,
+  };
+
+  (draft?.tabs || []).filter(tab => tab.enabled).forEach(tab => {
+    classes[tab.entityType] = tab.classIri || classForEntity(tab.entityType);
+    uriTemplates[tab.entityType] = tab.uriTemplate || uriTemplateForEntity(tab.entityType);
+    const fields = { id: generatedIdField(tab.entityType) };
+
+    tab.fields.filter(field => field.enabled && field.role === 'field' && field.name && field.predicate).forEach(field => {
+      if (field.linkTargetEntityType) {
+        fields[field.name] = {
+          predicate: field.predicate,
+          label: field.label || field.name,
+          inputType: 'uri',
+          objectType: 'uri',
+          createEntityFromInput: true,
+          targetEntityType: field.linkTargetEntityType,
+          targetClass: classes[field.linkTargetEntityType] || classForEntity(field.linkTargetEntityType),
+          targetTemplate: uriTemplates[field.linkTargetEntityType] || uriTemplateForEntity(field.linkTargetEntityType),
+          targetLabelField: 'name',
+        };
+        classProperties.push({
+          subject: tab.entityType,
+          predicate: field.predicate,
+          object: field.linkTargetEntityType,
+        });
+      } else {
+        fields[field.name] = {
+          predicate: field.predicate,
+          label: field.label || field.name,
+          inputType: field.inputType || 'text',
+          datatype: field.datatype || 'xsd:string',
+          required: false,
+          ...(field.parse ? { parse: field.parse } : {}),
+        };
+      }
+    });
+
+    nextStructure[tab.entityType] = {
+      idField: 'id',
+      fields,
+    };
+  });
+
+  return nextStructure;
+}
+
 export default function DataInput() {
   // Data input creates new report items or custom RDF entities using the same
   // dynamic field definitions that power editing elsewhere.
   const { activeOrganisationId, activeOrganisationIsUnscoped } = useOrganisationContext();
-  const { data, loading: structureLoading, error: structureError } = useQuery(GET_RDF_STRUCTURE, {
+  const { data, loading: structureLoading, error: structureError, refetch: refetchRdfStructure } = useQuery(GET_RDF_STRUCTURE, {
     variables: { organisationId: activeOrganisationId },
     skip: !activeOrganisationId && !activeOrganisationIsUnscoped,
   });
@@ -423,6 +880,10 @@ export default function DataInput() {
   const [selectedEntityType, setSelectedEntityType] = useState('');
   const [inputMode, setInputMode] = useState('');
   const [importFile, setImportFile] = useState(null);
+  const [structureImportFile, setStructureImportFile] = useState(null);
+  const [structureImportSummary, setStructureImportSummary] = useState(null);
+  const [structureDraft, setStructureDraft] = useState(null);
+  const [activeDraftTabId, setActiveDraftTabId] = useState('');
 
   const structure = useMemo(() => {
     if (!data?.rdfStructure?.json) return null;
@@ -449,6 +910,19 @@ export default function DataInput() {
   const importTemplateFields = useMemo(() => (
     templateFieldsByEntity({ data, structure, entityTypes })
   ), [data, entityTypes, structure]);
+  const draftEntityTypes = useMemo(
+    () => (structureDraft?.tabs || []).filter(tab => tab.enabled).map(tab => tab.entityType),
+    [structureDraft]
+  );
+  const activeDraftTab = useMemo(
+    () => (structureDraft?.tabs || []).find(tab => tab.id === activeDraftTabId) || structureDraft?.tabs?.[0] || null,
+    [activeDraftTabId, structureDraft]
+  );
+  const draftStructure = useMemo(
+    () => structureDraft ? structureFromDraft(structureDraft, structure) : null,
+    [structure, structureDraft]
+  );
+  const draftStructureStats = useMemo(() => draftStats(structureDraft), [structureDraft]);
   const canDownloadTemplate = !structureLoading && !structureError && entityTypes.length > 0;
   const initializedForm = useMemo(() => {
     return Object.fromEntries(fields.map(field => [field.name, formData[field.name] ?? emptyValueFor(field)]));
@@ -462,6 +936,7 @@ export default function DataInput() {
   }, [activeEntityType]);
 
   const [createRdfEntity] = useMutation(CREATE_RDF_ENTITY);
+  const [updateRdfStructure] = useMutation(UPDATE_RDF_STRUCTURE);
 
   const chooseInputMode = (mode) => {
     setInputMode(mode);
@@ -472,8 +947,37 @@ export default function DataInput() {
   const resetInputMode = () => {
     setInputMode('');
     setImportFile(null);
+    setStructureImportFile(null);
+    setStructureImportSummary(null);
+    setStructureDraft(null);
+    setActiveDraftTabId('');
     setError('');
     setMessage('');
+  };
+
+  const updateDraftTab = (tabId, patch) => {
+    setStructureDraft(current => {
+      if (!current) return current;
+      return {
+        ...current,
+        tabs: current.tabs.map(tab => tab.id === tabId ? { ...tab, ...patch } : tab),
+      };
+    });
+  };
+
+  const updateDraftField = (tabId, fieldId, patch) => {
+    setStructureDraft(current => {
+      if (!current) return current;
+      return {
+        ...current,
+        tabs: current.tabs.map(tab => tab.id === tabId
+          ? {
+              ...tab,
+              fields: tab.fields.map(field => field.id === fieldId ? { ...field, ...patch } : field),
+            }
+          : tab),
+      };
+    });
   };
 
   const handleSubmit = async (e) => {
@@ -515,6 +1019,71 @@ export default function DataInput() {
     }
 
     setMessage(`${importFile.name} is ready to import.`);
+  };
+
+  const handleStructureImportSubmit = async (event) => {
+    event.preventDefault();
+    setError('');
+    setMessage('');
+    setStructureImportSummary(null);
+
+    if (!structureImportFile) {
+      setError('Choose a .json, .csv, or .xlsx file to create an RDF structure.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const tables = await tablesFromImportFile(structureImportFile);
+      const draft = draftFromTables(tables, structureImportFile.name);
+      const { classCount, fieldCount } = draftStats(draft);
+
+      if (classCount === 0 || fieldCount === 0) {
+        throw new Error('No usable headers were found in the selected file.');
+      }
+
+      setStructureDraft(draft);
+      setActiveDraftTabId(draft.tabs[0]?.id || '');
+      setStructureImportSummary({ classCount, fieldCount });
+      setMessage(`Review the inferred RDF structure from ${structureImportFile.name}.`);
+    } catch (err) {
+      setError('Error: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveStructureDraft = async () => {
+    setError('');
+    setMessage('');
+    if (!structureDraft || !draftStructure) {
+      setError('Upload a file and review the inferred structure first.');
+      return;
+    }
+    if (draftStructureStats.classCount === 0 || draftStructureStats.fieldCount === 0) {
+      setError('Keep at least one class and one field before saving.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await updateRdfStructure({
+        variables: {
+          json: JSON.stringify(draftStructure, null, 2),
+          organisationId: activeOrganisationId,
+        },
+      });
+      await refetchRdfStructure?.();
+      setStructureImportSummary(draftStructureStats);
+      setMessage(`RDF structure saved from ${structureDraft.filename}.`);
+      setStructureImportFile(null);
+      setStructureDraft(null);
+      setActiveDraftTabId('');
+    } catch (err) {
+      setError('Error: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleDownloadJsonTemplate = () => {
@@ -629,6 +1198,7 @@ export default function DataInput() {
                   </div>
 
                   <form className="data-import-form" onSubmit={handleImportSubmit}>
+                    <h4>Import using the current RDF structure</h4>
                     <div className="data-import-template-actions">
                       <button type="button" onClick={handleDownloadXlsxTemplate} disabled={!canDownloadTemplate}>
                         Download XLSX template
@@ -662,6 +1232,236 @@ export default function DataInput() {
                       Upload file
                     </button>
                   </form>
+
+                  <form className="data-import-form data-structure-import-form" onSubmit={handleStructureImportSubmit}>
+                    <h4>Create an RDF structure from a file</h4>
+
+                    <label className="data-import-dropzone">
+                      <span>Upload unstructured file</span>
+                      <input
+                        type="file"
+                        accept=".xlsx,.csv,.json,text/csv,application/csv,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        onChange={(event) => {
+                          setStructureImportFile(event.target.files?.[0] || null);
+                          setStructureImportSummary(null);
+                          setError('');
+                          setMessage('');
+                        }}
+                      />
+                    </label>
+
+                    {structureImportFile && (
+                      <div className="data-import-file">
+                        <strong>{structureImportFile.name}</strong>
+                        <span>{Math.max(1, Math.ceil(structureImportFile.size / 1024))} KB</span>
+                      </div>
+                    )}
+
+                    {structureImportSummary && (
+                      <div className="data-import-summary">
+                        Created {structureImportSummary.classCount} classes and {structureImportSummary.fieldCount} fields.
+                      </div>
+                    )}
+
+                    <button type="submit" disabled={!structureImportFile || loading}>
+                      {loading ? 'Reading structure...' : 'Review inferred structure'}
+                    </button>
+                  </form>
+
+                  {structureDraft && activeDraftTab && (
+                    <section className="data-structure-review">
+                      <div className="data-structure-review-header">
+                        <div>
+                          <h4>Review inferred structure</h4>
+                          <p>{draftStructureStats.classCount} classes and {draftStructureStats.fieldCount} fields ready to save.</p>
+                        </div>
+                        <div className="data-import-template-actions">
+                          <button type="button" onClick={() => setStructureDraft(null)} disabled={loading}>
+                            Clear draft
+                          </button>
+                          <button type="button" onClick={handleSaveStructureDraft} disabled={loading}>
+                            {loading ? 'Saving...' : 'Save RDF structure'}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="data-structure-review-grid">
+                        <aside className="data-structure-tabs" aria-label="Imported sheets">
+                          {(structureDraft.tabs || []).map(tab => (
+                            <button
+                              key={tab.id}
+                              type="button"
+                              className={tab.id === activeDraftTab.id ? 'active' : ''}
+                              onClick={() => setActiveDraftTabId(tab.id)}
+                            >
+                              <strong>{tab.sourceName}</strong>
+                              <span>{tab.enabled ? tab.entityType : 'Ignored'}</span>
+                            </button>
+                          ))}
+                        </aside>
+
+                        <div className="data-structure-editor">
+                          <div className="data-structure-class-editor">
+                            <label>
+                              Use tab
+                              <select
+                                value={activeDraftTab.enabled ? 'yes' : 'no'}
+                                onChange={(event) => updateDraftTab(activeDraftTab.id, { enabled: event.target.value === 'yes' })}
+                              >
+                                <option value="yes">Class</option>
+                                <option value="no">Ignore</option>
+                              </select>
+                            </label>
+                            <label>
+                              Rows are
+                              <select
+                                value={activeDraftTab.rowRole}
+                                onChange={(event) => updateDraftTab(activeDraftTab.id, { rowRole: event.target.value })}
+                              >
+                                <option value="instances">Instances</option>
+                                <option value="metadata">Metadata</option>
+                              </select>
+                            </label>
+                            <label>
+                              Class name
+                              <input
+                                value={activeDraftTab.entityType}
+                                onChange={(event) => {
+                                  const entityType = nameFromLabel(event.target.value, 'importedClass');
+                                  updateDraftTab(activeDraftTab.id, {
+                                    entityType,
+                                    classIri: classForEntity(entityType),
+                                    uriTemplate: uriTemplateForEntity(entityType),
+                                  });
+                                }}
+                              />
+                            </label>
+                            <label>
+                              Class IRI
+                              <input
+                                value={activeDraftTab.classIri}
+                                onChange={(event) => updateDraftTab(activeDraftTab.id, { classIri: event.target.value })}
+                              />
+                            </label>
+                            <label>
+                              URI template
+                              <input
+                                value={activeDraftTab.uriTemplate}
+                                onChange={(event) => updateDraftTab(activeDraftTab.id, { uriTemplate: event.target.value })}
+                              />
+                            </label>
+                          </div>
+
+                          <div className="data-structure-source-note">
+                            Source tab: {activeDraftTab.sourceName}. Header row: {activeDraftTab.headerRowNumber}. Data rows: {activeDraftTab.dataRowCount}.
+                          </div>
+
+                          <div className="data-structure-field-table">
+                            <div className="data-structure-field-row header">
+                              <span>Column</span>
+                              <span>Role</span>
+                              <span>Field</span>
+                              <span>Predicate</span>
+                              <span>Type</span>
+                              <span>Links to</span>
+                            </div>
+                            {activeDraftTab.fields.map(field => (
+                              <div key={field.id} className={`data-structure-field-row${field.enabled ? '' : ' disabled'}`}>
+                                <span>{field.sourceColumn}</span>
+                                <label>
+                                  <select
+                                    value={field.enabled ? field.role : 'ignore'}
+                                    onChange={(event) => {
+                                      const value = event.target.value;
+                                      updateDraftField(activeDraftTab.id, field.id, {
+                                        enabled: value !== 'ignore',
+                                        role: value === 'ignore' ? field.role : value,
+                                      });
+                                    }}
+                                  >
+                                    <option value="field">Field</option>
+                                    <option value="ignore">Ignore</option>
+                                  </select>
+                                </label>
+                                <label>
+                                  <input
+                                    value={field.label}
+                                    onChange={(event) => {
+                                      const label = event.target.value;
+                                      updateDraftField(activeDraftTab.id, field.id, {
+                                        label,
+                                        name: nameFromLabel(label, 'field'),
+                                      });
+                                    }}
+                                  />
+                                  <small>{field.name}</small>
+                                </label>
+                                <label>
+                                  <input
+                                    value={field.predicate}
+                                    onChange={(event) => updateDraftField(activeDraftTab.id, field.id, { predicate: event.target.value })}
+                                  />
+                                </label>
+                                <label>
+                                  <select
+                                    value={field.inputType}
+                                    onChange={(event) => {
+                                      const inputType = event.target.value;
+                                      const datatype = inputType === 'number'
+                                        ? 'xsd:integer'
+                                        : inputType === 'date'
+                                          ? 'xsd:date'
+                                          : 'xsd:string';
+                                      updateDraftField(activeDraftTab.id, field.id, {
+                                        inputType,
+                                        datatype,
+                                        parse: inputType === 'number' ? 'int' : '',
+                                      });
+                                    }}
+                                    disabled={!!field.linkTargetEntityType}
+                                  >
+                                    <option value="text">Text</option>
+                                    <option value="textarea">Textarea</option>
+                                    <option value="number">Number</option>
+                                    <option value="date">Date</option>
+                                  </select>
+                                  {field.sampleValues.length > 0 && <small>{field.sampleValues.join(' | ')}</small>}
+                                </label>
+                                <label>
+                                  <select
+                                    value={field.linkTargetEntityType}
+                                    onChange={(event) => updateDraftField(activeDraftTab.id, field.id, { linkTargetEntityType: event.target.value })}
+                                  >
+                                    <option value="">Literal value</option>
+                                    {draftEntityTypes
+                                      .filter(entityType => entityType !== activeDraftTab.entityType)
+                                      .map(entityType => <option key={entityType} value={entityType}>{entityType}</option>)}
+                                  </select>
+                                </label>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <aside className="data-structure-visual" aria-label="RDF structure visual">
+                          {(structureDraft.tabs || []).filter(tab => tab.enabled).map(tab => (
+                            <div key={tab.id} className={tab.id === activeDraftTab.id ? 'active' : ''}>
+                              <strong>{tab.entityType}</strong>
+                              <span>{tab.classIri}</span>
+                              <ul>
+                                {tab.fields.filter(field => field.enabled && field.role === 'field').slice(0, 8).map(field => (
+                                  <li key={field.id}>
+                                    {field.label}
+                                    {field.linkTargetEntityType && <em>{' -> '}{field.linkTargetEntityType}</em>}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ))}
+                        </aside>
+                      </div>
+                    </section>
+                  )}
                 </section>
               </main>
             </>
