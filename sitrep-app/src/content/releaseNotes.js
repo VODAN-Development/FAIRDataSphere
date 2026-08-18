@@ -23,6 +23,26 @@ export const RELEASE_NOTE_TEMPLATE = {
 
 // Release notes are ordered newest-first for the About page.
 export const RELEASE_NOTES = [
+    {
+    version: 'v0.0.4',
+    date: '18-08-2026',
+    title: 'New additions and bug fixes',
+    summary: 'Fixed duplicate predicates error, made UI changes to RDF structure page and enabled bulk upload.',
+    sections: [
+      {
+        title: 'New',
+        items: ['Users can manually and automatically bulk upload records.'],
+      },
+      {
+        title: 'Improved',
+        items: ['UI changes to RDF structure page.'],
+      },
+      {
+        title: 'Fixed',
+        items: ['Error message when trying to add or edit records due to duplicate predicates has been fixed.'],
+      },
+    ],
+  },
   {
     version: 'v0.0.3',
     date: '09-06-2026',
