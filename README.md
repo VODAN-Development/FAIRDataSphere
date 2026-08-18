@@ -2,13 +2,13 @@
 
 ## Overview
 
-FAIR Data Sphere is a full-stack web application for creating, managing, and analyzing situation reports for incidents and events. It combines a React frontend, a Node/Apollo GraphQL backend, and an AllegroGraph RDF store so report data can be captured through user-friendly forms while remaining available as structured RDF.
+FAIR Data Sphere is a full-stack web application for creating, managing, and analysing situation reports for incidents and events. It combines a React frontend, a Node/Apollo GraphQL backend, and an AllegroGraph RDF store so report data can be captured through user-friendly forms after which it gets transformed into structured RDF.
 
 The application supports authenticated users, organisation workspaces, role-based access, configurable RDF structures, report item management, compiled reports, and scheduled report automation.
 
 ### Main Objective
 
-The project aims to make situation-report data easier to capture, organize, reuse, and query in a FAIR-oriented workflow. Users can enter incident data through dynamic forms, link items into reports, maintain organisation-specific RDF models, and persist the resulting data in a graph database for later retrieval and analysis.
+The project aims to make situation-report data easier to capture, organise, reuse, and query in a FAIR-oriented workflow. Users can enter incident data through dynamic forms, link items into reports, maintain organisation-specific RDF models, and persist the resulting data in a graph database for later retrieval and analysis.
 
 ## Common Data Model
 
@@ -89,7 +89,7 @@ For direct local development, make sure the frontend `VITE_GRAPHQL_URL` points t
 ### Prerequisites and Dependencies
 
 - Node.js with npm.
-- Docker and Docker Compose for the containerized setup.
+- Docker and Docker Compose for the containerised setup.
 - AllegroGraph, either through `docker-compose.yml` or an external AllegroGraph instance.
 - A modern browser.
 
@@ -102,7 +102,7 @@ Main application dependencies include React, React Router, Apollo Client, GraphQ
 3. Use Data Input to create report items from the active RDF-backed form.
 4. Use Items to browse, edit, delete, and assign report items.
 5. Use Reports to create reports and link selected report items.
-6. Use RDF Structure to review or customize classes, fields, predicates, datatypes, linked entities, and presets.
+6. Use RDF Structure to review or customise classes, fields, predicates, datatypes, linked entities, and presets.
 7. Use Organisation to manage organisation details, membership, roles, repository credentials, and join settings.
 8. Use Account to update your profile or password.
 
@@ -138,4 +138,4 @@ A typical workflow is:
 
 ## Contributing & Issue Reporting
 
-For reuse, see the [license](https://github.com/Liamvd/FAIRDataSphere/blob/main/LICENSE). For contributing to this project, see the [contributor file](https://github.com/Liamvd/FAIRDataSphere/blob/main/CONTRIBUTING.md). For issue reporting, use the [issue board](https://github.com/Liamvd/FAIRDataSphere/issues).
+For reuse, see the [license](https://github.com/VODAN-Development/FAIRDataSphere/blob/main/LICENSE). For contributing to this project, see the [contributor file](https://github.com/VODAN-Development/FAIRDataSphere/blob/main/CONTRIBUTING.md). For issue reporting, use the [issue board](https://github.com/VODAN-Development/FAIRDataSphere/issues).
