@@ -13,6 +13,8 @@ const GET_ACTIVE_ORGANISATIONS = gql`
     organisations {
       id
       name
+      repositoryStatus
+      repositoryProvisioningError
       currentUserRole
       currentUserPermissions {
         appWrite
@@ -21,6 +23,8 @@ const GET_ACTIVE_ORGANISATIONS = gql`
     myOrganisations {
       id
       name
+      repositoryStatus
+      repositoryProvisioningError
       currentUserRole
       currentUserPermissions {
         appWrite

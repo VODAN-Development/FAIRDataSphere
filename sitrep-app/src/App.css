@@ -614,20 +614,25 @@ nav a button {
   align-content: center;
   justify-items: center;
   padding: 1rem;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .data-input-mode-choice {
   display: grid;
-  grid-template-columns: repeat(2, minmax(12rem, 18rem));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 18rem));
   justify-content: center;
   gap: 1rem;
   width: min(100%, 38rem);
   margin: 0 auto;
+  box-sizing: border-box;
 }
 
 .data-input-mode-card {
   display: grid;
   gap: 0.45rem;
+  width: 100%;
+  min-width: 0;
   min-height: 8rem;
   padding: 1rem;
   border: 1px solid var(--color-border-soft);
@@ -745,6 +750,8 @@ nav a button {
   gap: 1rem;
   width: 100%;
   min-width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
   padding: 1rem;
   border: 1px solid var(--color-border-muted);
   border-radius: 8px;
@@ -756,6 +763,7 @@ nav a button {
   justify-content: space-between;
   align-items: flex-start;
   gap: 1rem;
+  min-width: 0;
   padding-bottom: 0.75rem;
   border-bottom: 1px solid var(--color-border-soft);
 }
@@ -763,6 +771,7 @@ nav a button {
 .data-structure-review-header h4,
 .data-structure-review-header p {
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .data-structure-review-header p {
@@ -781,11 +790,13 @@ nav a button {
   display: grid;
   align-content: start;
   gap: 0.4rem;
+  min-width: 0;
 }
 
 .data-structure-tabs button {
   display: grid;
   gap: 0.2rem;
+  min-width: 0;
   padding: 0.55rem;
   border: 1px solid var(--color-border-soft);
   border-radius: 6px;
@@ -800,10 +811,19 @@ nav a button {
   background-color: var(--color-accent-container);
 }
 
+.data-structure-tabs strong,
 .data-structure-tabs span {
+  min-width: 0;
   color: var(--color-on-surface-muted);
-  font-size: 0.8rem;
   overflow-wrap: anywhere;
+}
+
+.data-structure-tabs strong {
+  color: var(--color-heading);
+}
+
+.data-structure-tabs span {
+  font-size: 0.8rem;
 }
 
 .data-structure-editor {
@@ -844,30 +864,36 @@ nav a button {
 }
 
 .data-structure-source-note {
+  min-width: 0;
   padding: 0.55rem;
   border: 1px solid var(--color-border-soft);
   border-radius: 6px;
   background-color: var(--color-surface);
   color: var(--color-on-surface-muted);
   font-size: 0.85rem;
+  overflow-wrap: anywhere;
 }
 
 .data-structure-field-table {
   display: grid;
   gap: 0.35rem;
   min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
 }
 
 .data-structure-field-row {
   display: grid;
-  grid-template-columns: 3.4rem 5.2rem minmax(8rem, 1.15fr) minmax(8rem, 1fr) 6.5rem minmax(7rem, 0.85fr);
+  grid-template-columns: 3.4rem 5.2rem minmax(10rem, 1.15fr) minmax(10rem, 1fr) 6.5rem minmax(8rem, 0.85fr);
   gap: 0.45rem;
   align-items: start;
-  min-width: 0;
+  min-width: 48rem;
   padding: 0.45rem;
   border: 1px solid var(--color-border-soft);
   border-radius: 6px;
   background-color: var(--color-surface);
+  box-sizing: border-box;
 }
 
 .data-structure-field-row.header {
@@ -1273,6 +1299,50 @@ nav a button {
 .organisation-role.guest {
   background-color: var(--color-surface-subtle);
   color: var(--color-on-surface-muted);
+}
+
+.organisation-repository-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  min-height: 1.4rem;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--color-border-danger);
+  border-radius: 4px;
+  background-color: var(--color-danger-container);
+  color: var(--color-error-strong);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.organisation-repository-warning {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.85rem;
+  border: 1px solid var(--color-border-danger);
+  border-radius: 6px;
+  background-color: var(--color-danger-container);
+  color: var(--color-error-strong);
+}
+
+.organisation-repository-warning h4,
+.organisation-repository-warning p {
+  margin: 0;
+}
+
+.organisation-repository-warning button {
+  justify-self: start;
+  padding: 0.55rem 0.8rem;
+  border: none;
+  border-radius: 4px;
+  background-color: var(--color-primary);
+  color: var(--color-on-primary);
+  font-weight: 700;
+}
+
+.organisation-repository-warning button:disabled {
+  background-color: var(--color-disabled);
+  cursor: not-allowed;
 }
 
 .organisation-members {
@@ -3053,6 +3123,19 @@ nav a button {
   .organisation-role-layout,
   .organisation-role-editor-header {
     grid-template-columns: 1fr;
+  }
+
+  .data-structure-review-header {
+    flex-direction: column;
+  }
+
+  .data-structure-review-grid,
+  .data-structure-class-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .data-structure-tabs {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
   }
 }
 /* Reports page styles */

@@ -165,6 +165,9 @@ export async function runSparqlUpdate(update) {
 
   if (!response.ok) {
     const text = await response.text();
+    const friendlyDetail = /Could not create shared memory segment|\/dev\/shm|ulimit -[mv]|physical or virtual memory/i.test(text)
+      ? `${text}\n\nAllegroGraph could not allocate enough shared memory for this repository operation. If this is running in Docker, recreate the AllegroGraph container with a larger shared memory segment, for example the root docker-compose.yml setting shm_size: 2g.`
+      : text;
     console.error("SPARQL update failed", {
       repository: config.repository,
       username: config.username,
@@ -172,7 +175,7 @@ export async function runSparqlUpdate(update) {
       update,
       response: text,
     });
-    throw new Error(`SPARQL Update Error ${response.status}: ${text}`);
+    throw new Error(`SPARQL Update Error ${response.status}: ${friendlyDetail}`);
   }
 
   return response.text();

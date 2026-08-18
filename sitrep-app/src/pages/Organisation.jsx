@@ -11,6 +11,8 @@ const ORGANISATION_FIELDS = gql`
     createdAt
     updatedAt
     repository
+    repositoryStatus
+    repositoryProvisioningError
     repositoryUsername
     repositoryPassword
     repositoryReadUsername
@@ -79,6 +81,15 @@ const CREATE_ORGANISATION = gql`
   ${ORGANISATION_FIELDS}
   mutation CreateOrganisation($name: String!, $description: String) {
     createOrganisation(name: $name, description: $description) {
+      ...OrganisationFields
+    }
+  }
+`;
+
+const PROVISION_ORGANISATION_REPOSITORY = gql`
+  ${ORGANISATION_FIELDS}
+  mutation ProvisionOrganisationRepository($id: ID!) {
+    provisionOrganisationRepository(id: $id) {
       ...OrganisationFields
     }
   }
@@ -295,6 +306,9 @@ export default function Organisation() {
   const [createOrganisation, { loading: creating }] = useMutation(CREATE_ORGANISATION, {
     refetchQueries: ['GetOrganisations'],
   });
+  const [provisionOrganisationRepository, { loading: provisioningRepository }] = useMutation(PROVISION_ORGANISATION_REPOSITORY, {
+    refetchQueries: ['GetOrganisations'],
+  });
   const [joinOrganisation, { loading: joining }] = useMutation(JOIN_ORGANISATION, {
     refetchQueries: ['GetOrganisations'],
   });
@@ -363,10 +377,28 @@ export default function Organisation() {
     setFormError('');
 
     try {
-      await createOrganisation({ variables: { name: newName, description: newDescription } });
+      const result = await createOrganisation({ variables: { name: newName, description: newDescription } });
+      const createdOrganisation = result.data?.createOrganisation;
       setNewName('');
       setNewDescription('');
-      setMessage('Organisation created.');
+      setMessage(createdOrganisation?.repositoryStatus === 'ready'
+        ? 'Organisation created.'
+        : 'Organisation created. Its data repository is pending because AllegroGraph shared memory is currently full.');
+    } catch (submissionError) {
+      setFormError(submissionError.message);
+    }
+  }
+
+  async function handleProvisionRepository(organisation) {
+    setMessage('');
+    setFormError('');
+
+    try {
+      const result = await provisionOrganisationRepository({ variables: { id: organisation.id } });
+      const nextOrganisation = result.data?.provisionOrganisationRepository;
+      setMessage(nextOrganisation?.repositoryStatus === 'ready'
+        ? 'Data repository provisioned.'
+        : 'Repository is still pending. Try again after inactive repositories have closed or shared memory has been freed.');
     } catch (submissionError) {
       setFormError(submissionError.message);
     }
@@ -526,6 +558,24 @@ export default function Organisation() {
           <span className={`organisation-role ${roleLabel}`}>{roleLabel}</span>
         </div>
 
+        {selectedOrganisation.repositoryStatus !== 'ready' && (
+          <div className="organisation-repository-warning">
+            <h4>Data repository pending</h4>
+            <p>
+              {selectedOrganisation.repositoryProvisioningError || 'Organisation settings are available, but data input is disabled until the AllegroGraph repository is provisioned.'}
+            </p>
+            {isOwner && (
+              <button
+                type="button"
+                disabled={provisioningRepository}
+                onClick={() => handleProvisionRepository(selectedOrganisation)}
+              >
+                {provisioningRepository ? 'Trying...' : 'Try creating repository'}
+              </button>
+            )}
+          </div>
+        )}
+
         {isOwner ? (
           <OrganisationSettings
             key={selectedOrganisation.id}
@@ -537,6 +587,10 @@ export default function Organisation() {
           <div className="organisation-repository">
             <h4>Profile</h4>
             <dl>
+              <div>
+                <dt>Repository status</dt>
+                <dd>{selectedOrganisation.repositoryStatus}</dd>
+              </div>
               <div>
                 <dt>Name</dt>
                 <dd>{selectedOrganisation.name}</dd>
@@ -827,6 +881,9 @@ export default function Organisation() {
                     >
                       {organisation.name}
                     </button>
+                    {organisation.repositoryStatus !== 'ready' && (
+                      <span className="organisation-repository-badge">repo pending</span>
+                    )}
                   </div>
                 </div>
               ))

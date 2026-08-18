@@ -18,6 +18,7 @@ import {
   listOrganisationRdfStructurePresets,
   organisationRdfStructureJson,
   organisationRepositoryConfig,
+  provisionOrganisationRepository,
   rdfStructurePresetJson,
   saveOrganisationRdfStructurePreset,
   upsertOrganisationRole,
@@ -2135,6 +2136,11 @@ const resolvers = {
       return createOrganisation(user.id, { name, description });
     },
 
+    provisionOrganisationRepository: async (_, { id }, context) => {
+      const user = requireAuth(context);
+      return provisionOrganisationRepository(user, id);
+    },
+
     joinOrganisation: async (_, { id, password }, context) => {
       const user = requireAuth(context);
       return joinOrganisation(user.id, id, password);
@@ -2645,6 +2651,7 @@ for (const [name, resolver] of Object.entries(resolvers.Mutation)) {
     const accountMutations = new Set(["updateMyAccount", "updateMyPassword"]);
     const organisationMutations = new Set([
       "createOrganisation",
+      "provisionOrganisationRepository",
       "joinOrganisation",
       "leaveOrganisation",
       "updateOrganisation",

@@ -24,6 +24,7 @@ export default function OrganisationGate({ children, requireWrite = false }) {
   const activeOrganisation = organisations.find(organisation => organisation.id === activeOrganisationId);
   const canWrite = user?.role === 'admin'
     || !!activeOrganisation?.currentUserPermissions?.appWrite;
+  const repositoryPending = activeOrganisationId && activeOrganisation?.repositoryStatus !== 'ready';
 
   return (
     <div className="organisation-gated-page">
@@ -42,7 +43,11 @@ export default function OrganisationGate({ children, requireWrite = false }) {
           </select>
         </label>
       </div>
-      {requireWrite && !canWrite ? (
+      {repositoryPending ? (
+        <div className="error-message">
+          {activeOrganisation?.repositoryProvisioningError || 'This organisation data repository is still pending. Organisation settings remain available, but data input is disabled until the repository is provisioned.'}
+        </div>
+      ) : requireWrite && !canWrite ? (
         <div className="error-message">
           Guests can view organisation data, but cannot input, edit, or delete it.
         </div>

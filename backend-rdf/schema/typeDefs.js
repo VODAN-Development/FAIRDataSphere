@@ -51,6 +51,8 @@ export default `#graphql
     createdAt: String!
     updatedAt: String!
     repository: String
+    repositoryStatus: String!
+    repositoryProvisioningError: String
     repositoryUsername: String
     repositoryPassword: String
     repositoryReadUsername: String
@@ -298,6 +300,7 @@ export default `#graphql
 
     # Organisation lifecycle and membership.
     createOrganisation(name: String!, description: String): Organisation!
+    provisionOrganisationRepository(id: ID!): Organisation!
     joinOrganisation(id: ID!, password: String): Organisation!
     leaveOrganisation(id: ID!): Boolean!
     updateOrganisation(id: ID!, name: String!, description: String, joinRequiresPassword: Boolean!): Organisation!

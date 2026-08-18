@@ -26,6 +26,7 @@ const RDF_STRUCTURES_DIR = path.join(DATA_DIR, "rdf-structures");
 const RDF_STRUCTURE_FILE_NAME = "reportRdfStructure.json";
 const RDF_PRESETS_FILE_NAME = "presets.json";
 const UNSCOPED_RDF_STRUCTURE_KEY = "no-organisation";
+const REPOSITORY_PENDING_MESSAGE = "The organisation was created, but its AllegroGraph repository could not be created because shared memory is currently full. Data input will be unavailable until the repository is provisioned.";
 let credentialUpgradeQueue = Promise.resolve();
 
 // Higher weights represent broader organisation permissions.
@@ -162,6 +163,38 @@ function repositoryRoleCredentials(organisationId, repository, roleId) {
     repository,
     username: `sitrep_${shortId}_${slug(roleId).replace(/-/g, "_")}`,
     password: generatedPassword(),
+  };
+}
+
+function isRepositoryMemoryError(error) {
+  return /shared memory|\/dev\/shm|insufficient shared memory|Could not create shared memory segment/i.test(error?.message || "");
+}
+
+function repositoryIsReady(organisation) {
+  return !!(organisation.repository && organisation.repositoryUsername && organisation.repositoryPassword);
+}
+
+function repositoryPendingError(error) {
+  if (!error) return null;
+  return isRepositoryMemoryError(error)
+    ? REPOSITORY_PENDING_MESSAGE
+    : error.message || "The organisation data repository is not ready.";
+}
+
+async function provisionRepositoryCredentials(organisation) {
+  const credentials = repositoryCredentials(organisation.id, organisation.name);
+  const readCredentials = repositoryReadCredentials(organisation.id, credentials.repository);
+  await createRepository(credentials.repository);
+  await createRepositoryUser(credentials);
+  await createRepositoryUser(readCredentials);
+  return {
+    ...organisation,
+    repository: credentials.repository,
+    repositoryUsername: credentials.username,
+    repositoryPassword: credentials.password,
+    repositoryReadUsername: readCredentials.username,
+    repositoryReadPassword: readCredentials.password,
+    repositoryProvisioningError: null,
   };
 }
 
@@ -382,6 +415,8 @@ async function organisationPayload(organisation, currentActor) {
     createdAt: organisation.createdAt,
     updatedAt: organisation.updatedAt,
     repository: canViewMemberRepositoryCredentials ? organisation.repository || null : null,
+    repositoryStatus: repositoryIsReady(organisation) ? "ready" : "pending",
+    repositoryProvisioningError: repositoryIsReady(organisation) ? null : organisation.repositoryProvisioningError || REPOSITORY_PENDING_MESSAGE,
     repositoryUsername: canViewOwnerRepositoryCredentials ? organisation.repositoryUsername || null : null,
     repositoryPassword: canViewOwnerRepositoryCredentials ? decryptRepositoryPassword(organisation.repositoryPassword) || null : null,
     repositoryReadUsername: canViewMemberRepositoryCredentials ? organisation.repositoryReadUsername || null : null,
@@ -432,25 +467,21 @@ export async function createOrganisation(userId, { name, description }) {
     throw new Error("Organisation name is required.");
   }
 
-  // Creating an organisation provisions the backing AllegroGraph repository and
-  // grants both write and read-only repository users before metadata is saved.
+  // Creating an organisation tries to provision the backing AllegroGraph
+  // repository, but metadata is still saved if shared memory is temporarily full.
   const organisations = await readOrganisations();
   const now = new Date().toISOString();
   const id = randomUUID();
-  const credentials = repositoryCredentials(id, trimmedName);
-  const readCredentials = repositoryReadCredentials(id, credentials.repository);
-  await createRepository(credentials.repository);
-  await createRepositoryUser(credentials);
-  await createRepositoryUser(readCredentials);
-  const organisation = {
+  let organisation = {
     id,
     name: trimmedName,
     description: String(description || "").trim() || null,
-    repository: credentials.repository,
-    repositoryUsername: credentials.username,
-    repositoryPassword: credentials.password,
-    repositoryReadUsername: readCredentials.username,
-    repositoryReadPassword: readCredentials.password,
+    repository: null,
+    repositoryUsername: null,
+    repositoryPassword: null,
+    repositoryReadUsername: null,
+    repositoryReadPassword: null,
+    repositoryProvisioningError: null,
     createdBy: userId,
     createdAt: now,
     updatedAt: now,
@@ -460,10 +491,60 @@ export async function createOrganisation(userId, { name, description }) {
       joinedAt: now,
     }],
   };
+  try {
+    organisation = await provisionRepositoryCredentials(organisation);
+  } catch (error) {
+    if (!isRepositoryMemoryError(error)) throw error;
+    organisation.repositoryProvisioningError = repositoryPendingError(error);
+    console.error("Organisation repository provisioning deferred", {
+      organisationId: id,
+      name: trimmedName,
+      error: error.message,
+    });
+  }
   organisation.roles = normalizeOrganisationRoles(organisation);
 
   await writeOrganisations([...organisations, organisation]);
   return organisationPayload(organisation, userId);
+}
+
+export async function provisionOrganisationRepository(actor, organisationId) {
+  const organisations = await readOrganisations();
+  const organisationIndex = organisations.findIndex(organisation => organisation.id === organisationId);
+  if (organisationIndex === -1) {
+    throw new Error("Organisation not found.");
+  }
+  const organisation = organisations[organisationIndex];
+  requireOwner(organisation, actor);
+  if (repositoryIsReady(organisation)) {
+    return organisationPayload(organisation, actor);
+  }
+
+  try {
+    let provisionedOrganisation = {
+      ...(await provisionRepositoryCredentials(organisation)),
+      updatedAt: new Date().toISOString(),
+    };
+    provisionedOrganisation.roles = normalizeOrganisationRoles(provisionedOrganisation);
+    for (const role of provisionedOrganisation.roles) {
+      provisionedOrganisation = await ensureRoleRepositoryUser(provisionedOrganisation, role.id);
+    }
+    const nextOrganisations = [...organisations];
+    nextOrganisations[organisationIndex] = provisionedOrganisation;
+    await writeOrganisations(nextOrganisations);
+    return organisationPayload(provisionedOrganisation, actor);
+  } catch (error) {
+    if (!isRepositoryMemoryError(error)) throw error;
+    const nextOrganisation = {
+      ...organisation,
+      repositoryProvisioningError: repositoryPendingError(error),
+      updatedAt: new Date().toISOString(),
+    };
+    const nextOrganisations = [...organisations];
+    nextOrganisations[organisationIndex] = nextOrganisation;
+    await writeOrganisations(nextOrganisations);
+    return organisationPayload(nextOrganisation, actor);
+  }
 }
 
 export async function joinOrganisation(userId, organisationId, password) {
@@ -753,8 +834,9 @@ export async function canWriteOrganisation(user, organisationId) {
 export async function organisationRepositoryConfig(organisationId) {
   if (!organisationId) return defaultAllegroRepositoryConfig();
 
-  // Repository credentials may be missing on records created before per-org
-  // repositories existed, so lookup upgrades the record before returning config.
+  // Repository credentials may be pending when AllegroGraph shared memory was
+  // full during organisation creation. Data pages should report that state
+  // clearly instead of trying to provision a repository during normal reads.
   const organisation = await withCredentialUpgradeLock(async () => {
     const organisations = await readOrganisations();
     const organisationIndex = organisations.findIndex(candidate => candidate.id === organisationId);
@@ -763,6 +845,10 @@ export async function organisationRepositoryConfig(organisationId) {
     }
     return ensureOrganisationCredentialSets(organisations, organisationIndex);
   });
+
+  if (!repositoryIsReady(organisation)) {
+    throw new Error(organisation.repositoryProvisioningError || REPOSITORY_PENDING_MESSAGE);
+  }
 
   return {
     repository: organisation.repository,
@@ -806,13 +892,15 @@ async function ensureOrganisationCredentialSets(organisations, organisationIndex
   const organisation = organisations[organisationIndex];
   let nextOrganisation = organisation;
 
-  if (!organisation.repository || !organisation.repositoryUsername || !organisation.repositoryPassword) {
+  if (!organisation.repository) {
+    return organisation;
+  }
+
+  if (!organisation.repositoryUsername || !organisation.repositoryPassword) {
     const credentials = repositoryCredentials(organisation.id, organisation.name);
-    await createRepository(credentials.repository);
-    await createRepositoryUser(credentials);
+    await createRepositoryUser({ ...credentials, repository: organisation.repository });
     nextOrganisation = {
       ...nextOrganisation,
-      repository: credentials.repository,
       repositoryUsername: credentials.username,
       repositoryPassword: credentials.password,
     };
@@ -849,6 +937,7 @@ async function ensureRoleRepositoryUser(organisation, roleId) {
   const roles = normalizeOrganisationRoles(organisation);
   const roleIndex = roles.findIndex(role => role.id === roleId);
   if (roleIndex === -1) return organisation;
+  if (!organisation.repository) return { ...organisation, roles };
   const role = roles[roleIndex];
   if (role.id === "owner" || role.id === "member") {
     const username = role.id === "owner" ? organisation.repositoryUsername : organisation.repositoryReadUsername;

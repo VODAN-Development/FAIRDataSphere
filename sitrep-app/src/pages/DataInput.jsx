@@ -228,6 +228,226 @@ function flattenFieldColumns(field, prefix = '') {
   }];
 }
 
+function isBlankImportValue(value) {
+  if (Array.isArray(value)) return value.every(isBlankImportValue);
+  if (value && typeof value === 'object') return Object.values(value).every(isBlankImportValue);
+  return String(value ?? '').trim() === '';
+}
+
+function parseJsonLikeValue(value) {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (!['{', '['].includes(trimmed.charAt(0))) return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function importScalarValue(field, value) {
+  if (isBlankImportValue(value)) return emptyValueFor(field);
+  const parsed = parseJsonLikeValue(value);
+  if (field.kind === 'array' || field.allowMultiple || field.inputType === 'text-list' || field.inputType === 'uri-list') {
+    if (Array.isArray(parsed)) return parsed.map(item => String(item ?? '')).filter(Boolean);
+    return String(parsed ?? '')
+      .split(/\r?\n|;/)
+      .map(item => item.trim())
+      .filter(Boolean);
+  }
+  return parsed ?? '';
+}
+
+function importedJsonValueForField(field, value) {
+  if (isBlankImportValue(value)) return emptyValueFor(field);
+  const parsed = parseJsonLikeValue(value);
+
+  if (field.kind === 'group' || field.kind === 'importClass') {
+    if (field.allowMultiple && Array.isArray(parsed)) {
+      return parsed.map(item => Object.fromEntries((field.subfields || []).map(subfield => [
+        subfield.name,
+        importedJsonValueForField(subfield, item?.[subfield.name]),
+      ])));
+    }
+    const source = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    return Object.fromEntries((field.subfields || []).map(subfield => [
+      subfield.name,
+      importedJsonValueForField(subfield, source[subfield.name]),
+    ]));
+  }
+
+  if (field.kind === 'conditional') {
+    const source = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    const selectedOption = source.selectedOption || '';
+    const option = (field.options || []).find(candidate => candidate.name === selectedOption);
+    return {
+      selectedOption,
+      values: Object.fromEntries((option?.subfields || []).map(subfield => [
+        subfield.name,
+        importedJsonValueForField(subfield, source[subfield.name] ?? source.values?.[subfield.name]),
+      ])),
+    };
+  }
+
+  return importScalarValue(field, parsed);
+}
+
+function importedValuesFromJsonRow(fields, row = {}) {
+  return Object.fromEntries((fields || []).map(field => [
+    field.name,
+    importedJsonValueForField(field, row[field.name]),
+  ]));
+}
+
+function setImportedPathValue(values, fields, path, value) {
+  if (isBlankImportValue(value)) return;
+  const [fieldName, ...rest] = String(path || '').split('.');
+  const field = (fields || []).find(candidate => candidate.name === fieldName);
+  if (!field) return;
+
+  if (rest.length === 0) {
+    values[field.name] = importScalarValue(field, value);
+    return;
+  }
+
+  if (field.kind === 'group' || field.kind === 'importClass') {
+    if (field.allowMultiple) {
+      const currentValues = Array.isArray(values[field.name]) ? values[field.name] : [];
+      const defaultValues = emptyValueFor(field);
+      const target = currentValues[0] && typeof currentValues[0] === 'object'
+        ? currentValues[0]
+        : Array.isArray(defaultValues) ? defaultValues[0] : {};
+      values[field.name] = [target];
+      setImportedPathValue(target, field.subfields || [], rest.join('.'), value);
+      return;
+    }
+
+    const target = values[field.name] && typeof values[field.name] === 'object' && !Array.isArray(values[field.name])
+      ? values[field.name]
+      : emptyValueFor(field);
+    values[field.name] = target;
+    setImportedPathValue(target, field.subfields || [], rest.join('.'), value);
+    return;
+  }
+
+  if (field.kind !== 'conditional') return;
+  const conditionalValue = values[field.name] && typeof values[field.name] === 'object'
+    ? values[field.name]
+    : emptyValueFor(field);
+  values[field.name] = conditionalValue;
+
+  if (rest[0] === 'selectedOption') {
+    conditionalValue.selectedOption = String(value || '').trim();
+    return;
+  }
+
+  const optionName = rest[0];
+  const option = (field.options || []).find(candidate => candidate.name === optionName);
+  if (!option) return;
+  conditionalValue.selectedOption = conditionalValue.selectedOption || optionName;
+  conditionalValue.values = conditionalValue.values || {};
+  setImportedPathValue(conditionalValue.values, option.subfields || [], rest.slice(1).join('.'), value);
+}
+
+function importHeaderIndex(rows, fields) {
+  const knownPaths = new Set((fields || []).flatMap(field => flattenFieldColumns(field).map(column => column.path)));
+  const limit = Math.min(rows.length, 10);
+  let bestIndex = -1;
+  let bestScore = 0;
+
+  for (let index = 0; index < limit; index += 1) {
+    const score = (rows[index] || []).filter(value => knownPaths.has(String(value || '').trim())).length;
+    if (score > bestScore) {
+      bestIndex = index;
+      bestScore = score;
+    }
+  }
+
+  return bestScore > 0 ? bestIndex : -1;
+}
+
+function isImportLabelRow(row, fields) {
+  const labels = new Set((fields || []).flatMap(field => flattenFieldColumns(field).map(column => column.label)));
+  const values = (row || []).map(value => String(value || '').trim()).filter(Boolean);
+  return values.length > 0 && values.every(value => labels.has(value));
+}
+
+function importedValuesFromTableRow(fields, headers, row) {
+  const values = Object.fromEntries((fields || []).map(field => [field.name, emptyValueFor(field)]));
+  headers.forEach((header, columnIndex) => {
+    const path = String(header || '').trim();
+    if (path) setImportedPathValue(values, fields, path, row[columnIndex]);
+  });
+  return values;
+}
+
+function entityTypeForTable(table, templateFields, tableIndex, tableCount) {
+  const entityTypes = Object.keys(templateFields || {});
+  const normalizedTableName = String(table?.name || '').trim().toLowerCase();
+  const exactMatch = entityTypes.find(entityType => entityType.toLowerCase() === normalizedTableName);
+  if (exactMatch) return exactMatch;
+  if (tableCount === 1 && entityTypes.length === 1) return entityTypes[0];
+  if (tableIndex < entityTypes.length) return entityTypes[tableIndex];
+  return '';
+}
+
+function importRecordsFromTables(tables, templateFields) {
+  return (tables || []).flatMap((table, tableIndex) => {
+    const entityType = entityTypeForTable(table, templateFields, tableIndex, tables.length);
+    const fields = templateFields[entityType] || [];
+    if (!entityType || fields.length === 0) return [];
+
+    const headerIndex = importHeaderIndex(table.rows || [], fields);
+    if (headerIndex < 0) return [];
+    const headers = table.rows[headerIndex] || [];
+    const dataRows = (table.rows || []).slice(headerIndex + 1)
+      .filter(row => !isImportLabelRow(row, fields))
+      .filter(row => row.some(value => String(value ?? '').trim()));
+
+    return dataRows.map(row => ({
+      entityType,
+      fieldValues: fieldInputsPayload(fields, importedValuesFromTableRow(fields, headers, row)),
+    }));
+  });
+}
+
+function importRecordsFromJson(value, filename, templateFields) {
+  const entityTypes = Object.keys(templateFields || {});
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const records = entityTypes.flatMap(entityType => {
+      const sourceRows = Array.isArray(value[entityType])
+        ? value[entityType]
+        : value[entityType] && typeof value[entityType] === 'object' ? [value[entityType]] : [];
+      return sourceRows
+        .filter(row => row && typeof row === 'object' && !Array.isArray(row))
+        .map(row => ({
+          entityType,
+          fieldValues: fieldInputsPayload(templateFields[entityType], importedValuesFromJsonRow(templateFields[entityType], row)),
+        }));
+    });
+    if (records.length > 0) return records;
+  }
+
+  if (Array.isArray(value) && entityTypes.length === 1) {
+    return value
+      .filter(row => row && typeof row === 'object' && !Array.isArray(row))
+      .map(row => ({
+        entityType: entityTypes[0],
+        fieldValues: fieldInputsPayload(templateFields[entityTypes[0]], importedValuesFromJsonRow(templateFields[entityTypes[0]], row)),
+      }));
+  }
+
+  return importRecordsFromTables(tablesFromJson(value, filename), templateFields);
+}
+
+async function importRecordsFromFile(file, templateFields) {
+  if (file.name.toLowerCase().endsWith('.json')) {
+    return importRecordsFromJson(JSON.parse(await file.text()), file.name, templateFields);
+  }
+  return importRecordsFromTables(await tablesFromImportFile(file), templateFields);
+}
+
 function entityTemplateObject(fields) {
   return Object.fromEntries(fields.map(field => [field.name, templateValueForField(field)]));
 }
@@ -376,7 +596,7 @@ function zipFiles(files) {
 
 function safeSheetName(value, usedNames) {
   const base = String(value || 'Data')
-    .replace(/[\[\]*?/\\:]/g, ' ')
+    .replace(/[\\[\]*?/:]/g, ' ')
     .trim()
     .slice(0, 31) || 'Data';
   let name = base;
@@ -684,63 +904,6 @@ function generatedIdField(entityType) {
   };
 }
 
-function structureFromTables(tables, baseStructure = {}) {
-  const classes = {};
-  const uriTemplates = {};
-  const nextStructure = {
-    prefixes: {
-      sitrep: 'http://sitrep.example.org/ontology#',
-      resource: 'http://sitrep.example.org/resource/',
-      xsd: 'http://www.w3.org/2001/XMLSchema#',
-      rdf: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
-      rdfs: 'http://www.w3.org/2000/01/rdf-schema#',
-      owl: 'http://www.w3.org/2002/07/owl#',
-      hds: 'http://example.org/hds#',
-      ...(baseStructure?.prefixes || {}),
-    },
-    classes,
-    uriTemplates,
-    equivalentClasses: {},
-    classProperties: [],
-  };
-  const entityNames = new Set();
-
-  tables.forEach((table, tableIndex) => {
-    const headerIndex = inferHeaderIndex(table.rows);
-    if (headerIndex < 0) return;
-    const header = table.rows[headerIndex] || [];
-    const dataRows = table.rows.slice(headerIndex + 1);
-    const entityType = uniqueName(table.name || `Imported data ${tableIndex + 1}`, entityNames, 'importedClass');
-    const fieldNames = new Set(['id']);
-    const fields = {
-      id: generatedIdField(entityType),
-    };
-
-    header.forEach((label, columnIndex) => {
-      const cleanLabel = String(label || '').trim();
-      if (!cleanLabel) return;
-      const fieldName = uniqueName(cleanLabel, fieldNames, 'field');
-      const inferred = inferFieldType(cleanLabel, dataRows.map(row => row[columnIndex]));
-      fields[fieldName] = {
-        predicate: `sitrep:${fieldName}`,
-        label: cleanLabel,
-        required: false,
-        ...inferred,
-      };
-    });
-
-    if (Object.keys(fields).length <= 1) return;
-    classes[entityType] = classForEntity(entityType);
-    uriTemplates[entityType] = uriTemplateForEntity(entityType);
-    nextStructure[entityType] = {
-      idField: 'id',
-      fields,
-    };
-  });
-
-  return nextStructure;
-}
-
 function draftFromTables(tables, filename) {
   const entityNames = new Set();
   return {
@@ -1008,7 +1171,7 @@ export default function DataInput() {
     }
   };
 
-  const handleImportSubmit = (event) => {
+  const handleImportSubmit = async (event) => {
     event.preventDefault();
     setError('');
     setMessage('');
@@ -1018,7 +1181,38 @@ export default function DataInput() {
       return;
     }
 
-    setMessage(`${importFile.name} is ready to import.`);
+    setLoading(true);
+    try {
+      const records = await importRecordsFromFile(importFile, importTemplateFields);
+      if (records.length === 0) {
+        throw new Error('No importable records were found. Use the downloaded template so sheet names and column headers match the current RDF structure.');
+      }
+
+      for (const record of records) {
+        await createRdfEntity({
+          variables: {
+            entityType: record.entityType,
+            fieldValues: record.fieldValues,
+            organisationId: activeOrganisationId,
+          },
+        });
+      }
+
+      const entityCounts = records.reduce((counts, record) => ({
+        ...counts,
+        [record.entityType]: (counts[record.entityType] || 0) + 1,
+      }), {});
+      const summary = Object.entries(entityCounts)
+        .map(([entityType, count]) => `${count} ${titleForEntity(entityType).toLowerCase()}${count === 1 ? '' : 's'}`)
+        .join(', ');
+      setImportFile(null);
+      setMessage(`Imported ${summary} from ${importFile.name}.`);
+      notifyReportsUpdated();
+    } catch (err) {
+      setError('Error: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleStructureImportSubmit = async (event) => {
@@ -1117,11 +1311,11 @@ export default function DataInput() {
               <section className="data-input-mode-choice">
                 <button type="button" className="data-input-mode-card" onClick={() => chooseInputMode('manual')}>
                   <strong>Manual data input</strong>
-                  <span>Create records with the current input form.</span>
+                  <span>Create records one at a time with the current input form.</span>
                 </button>
                 <button type="button" className="data-input-mode-card" onClick={() => chooseInputMode('import')}>
                   <strong>Import data</strong>
-                  <span>Upload a file for import.</span>
+                  <span>Bulk upload records from a file.</span>
                 </button>
               </section>
             </main>
@@ -1228,8 +1422,8 @@ export default function DataInput() {
                       </div>
                     )}
 
-                    <button type="submit" disabled={!importFile}>
-                      Upload file
+                    <button type="submit" disabled={!importFile || loading}>
+                      {loading ? 'Importing...' : 'Upload file'}
                     </button>
                   </form>
 

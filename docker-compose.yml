@@ -28,6 +28,7 @@ services:
       AGRAPH_SUPER_PASSWORD: ${ALLEGRO_PASSWORD}
     shm_size: 2g
     volumes:
+      - ./allegrograph/agraph.cfg:/agraph/etc/agraph.cfg:ro
       - allegrograph_data:/agraph/data
     expose:
       - "10035"

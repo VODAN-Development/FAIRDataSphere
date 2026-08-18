@@ -60,6 +60,8 @@ This starts:
 - The backend GraphQL API on port `4000` internally.
 - The built frontend served by nginx.
 
+The AllegroGraph service mounts `allegrograph/agraph.cfg`. This config keeps repository instances warm for five minutes after their last access with `InstanceTimeout 5m`, then lets AllegroGraph close idle instances and release shared memory. This helps small servers keep many organisation repositories on disk without keeping every repository open in `/dev/shm`.
+
 ### Local Development
 
 You can also run the frontend and backend directly.
@@ -108,6 +110,12 @@ Main application dependencies include React, React Router, Apollo Client, GraphQ
 
 Admins can also work without a selected organisation to manage global structures and data where permitted.
 
+### Repository provisioning
+
+Each organisation normally receives its own AllegroGraph repository during creation. If AllegroGraph cannot create the repository because shared memory is full, the organisation is still created in a pending state. Members can still join the organisation, owners can edit its profile, roles can be managed, and file-backed features such as compiled report settings remain available where they do not need RDF data.
+
+Pending organisations cannot use RDF-backed pages such as Data Input, Items, Reports, or RDF entity browsing until the repository is provisioned. Owners and admins can open Organisation, select the pending workspace, and use **Try creating repository** after idle repositories have closed or memory has been freed.
+
 ## FAQ
 
 ### Where is the wiki?
@@ -121,6 +129,32 @@ RDF data is stored in AllegroGraph. Some application metadata, such as users, or
 ### Can the RDF model be changed?
 
 Yes. The RDF Structure page exposes the active structure and supports organisation-specific structures and presets. Core generated report and report-item fields are preserved because the backend depends on them.
+
+### How do I fix AllegroGraph shared memory errors?
+
+If SPARQL updates fail with an error such as `Could not create shared memory segment`, AllegroGraph cannot allocate enough shared memory for the repository operation. The Docker Compose setup configures the AllegroGraph container with `shm_size: 2g`, but an already-created container may need to be recreated before that setting takes effect:
+
+```bash
+docker compose up -d --force-recreate allegrograph
+docker compose up -d --force-recreate backend
+```
+
+The compose setup also mounts `allegrograph/agraph.cfg`, where `InstanceTimeout 5m` tells AllegroGraph to close idle repository instances after roughly five minutes. The timeout is advisory, so cleanup may happen shortly after the five-minute mark rather than exactly on it. Recreate or restart the AllegroGraph container after changing this file:
+
+```bash
+docker compose up -d --force-recreate allegrograph
+```
+
+If the error persists, verify the live container has a large `/dev/shm` mount:
+
+```bash
+docker inspect --format '{{.HostConfig.ShmSize}}' "$(docker compose ps -q allegrograph)"
+docker exec -it "$(docker compose ps -q allegrograph)" df -h /dev/shm
+```
+
+The shared-memory size should be larger than the requested segment size in the error, and idle repositories should release usage after the configured timeout. Also check that the host has enough available memory for AllegroGraph and Docker.
+
+If repository creation fails while creating an organisation, FAIR Data Sphere saves the organisation without an AllegroGraph repository and marks it as pending. This keeps account, membership, profile, and role management available. Once shared memory is available again, retry from the Organisation page with **Try creating repository**.
 
 ### Is this intended for local development or deployment?
 
