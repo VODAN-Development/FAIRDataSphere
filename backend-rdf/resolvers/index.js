@@ -2131,9 +2131,9 @@ const resolvers = {
       return true;
     },
 
-    createOrganisation: async (_, { name, description }, context) => {
+    createOrganisation: async (_, { name, description, joinRequiresPassword, joinPassword }, context) => {
       const user = requireAuth(context);
-      return createOrganisation(user.id, { name, description });
+      return createOrganisation(user.id, { name, description, joinRequiresPassword, joinPassword });
     },
 
     provisionOrganisationRepository: async (_, { id }, context) => {
@@ -2151,9 +2151,9 @@ const resolvers = {
       return leaveOrganisation(user, id);
     },
 
-    updateOrganisation: async (_, { id, name, description, joinRequiresPassword }, context) => {
+    updateOrganisation: async (_, { id, name, description, joinRequiresPassword, joinPassword }, context) => {
       const user = requireAuth(context);
-      return updateOrganisation(user, id, { name, description, joinRequiresPassword });
+      return updateOrganisation(user, id, { name, description, joinRequiresPassword, joinPassword });
     },
 
     updateOrganisationMemberRole: async (_, { organisationId, userId, role }, context) => {

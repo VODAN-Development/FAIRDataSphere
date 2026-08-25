@@ -3,6 +3,7 @@ import { mkdir, readFile, rm, writeFile } from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import { listUsersByIds } from "./authStore.js";
+import { hashPassword, verifyPassword } from "./passwords.js";
 import {
   createRepository,
   createRepositoryUser,
@@ -106,10 +107,6 @@ function slug(value) {
 
 function generatedPassword() {
   return randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "").slice(0, 16);
-}
-
-function generatedJoinPassword() {
-  return randomUUID().replace(/-/g, "").slice(0, 16);
 }
 
 // Each organisation receives dedicated write credentials plus separate read-only
@@ -376,6 +373,50 @@ function isAdmin(user) {
   return user?.role === "admin";
 }
 
+function joinPasswordIsConfigured(organisation) {
+  return !!(organisation.joinPasswordHash || organisation.joinPassword);
+}
+
+function normalizeJoinPasswordInput(password) {
+  const value = String(password || "").trim();
+  if (!value) return null;
+  if (value.length < 8) {
+    throw new Error("Join password must be at least 8 characters.");
+  }
+  return value;
+}
+
+async function joinPasswordFields(password) {
+  const normalizedPassword = normalizeJoinPasswordInput(password);
+  if (!normalizedPassword) {
+    throw new Error("Join password is required.");
+  }
+  return {
+    joinPassword: normalizedPassword,
+    joinPasswordHash: await hashPassword(normalizedPassword),
+  };
+}
+
+async function verifyOrganisationJoinPassword(organisation, password) {
+  if (!joinPasswordIsConfigured(organisation)) return { valid: true, migratedOrganisation: organisation };
+
+  if (organisation.joinPasswordHash) {
+    return {
+      valid: await verifyPassword(password || "", organisation.joinPasswordHash),
+      migratedOrganisation: organisation,
+    };
+  }
+
+  const legacyPassword = decryptJoinPassword(organisation.joinPassword);
+  const valid = !!legacyPassword && password === legacyPassword;
+  return {
+    valid,
+    migratedOrganisation: valid
+      ? { ...organisation, joinPasswordHash: await hashPassword(legacyPassword) }
+      : organisation,
+  };
+}
+
 function actorId(actor) {
   return typeof actor === "string" ? actor : actor?.id;
 }
@@ -405,7 +446,7 @@ async function organisationPayload(organisation, currentActor) {
     || !!currentPermissions.viewOwnerCredentials;
   const canViewMemberRepositoryCredentials = canViewOwnerRepositoryCredentials
     || !!currentPermissions.viewMemberCredentials;
-  const canViewJoinPassword = !!currentPermissions.viewJoinPassword;
+  const canViewJoinPassword = isAdmin(currentActor) || !!currentPermissions.viewJoinPassword;
   const canViewRoleCredentials = isAdmin(currentActor) || canManageRoles(organisation, currentActor);
   return {
     id: organisation.id,
@@ -421,7 +462,7 @@ async function organisationPayload(organisation, currentActor) {
     repositoryPassword: canViewOwnerRepositoryCredentials ? decryptRepositoryPassword(organisation.repositoryPassword) || null : null,
     repositoryReadUsername: canViewMemberRepositoryCredentials ? organisation.repositoryReadUsername || null : null,
     repositoryReadPassword: canViewMemberRepositoryCredentials ? decryptRepositoryPassword(organisation.repositoryReadPassword) || null : null,
-    joinRequiresPassword: !!organisation.joinPassword,
+    joinRequiresPassword: joinPasswordIsConfigured(organisation),
     joinPassword: canViewJoinPassword ? decryptJoinPassword(organisation.joinPassword) || null : null,
     currentUserRole: currentMembership?.role || null,
     currentUserPermissions: currentMembership ? normalizeRolePermissions(currentMembership.role, currentPermissions) : null,
@@ -461,11 +502,14 @@ export async function listMyOrganisations(currentActor) {
   );
 }
 
-export async function createOrganisation(userId, { name, description }) {
+export async function createOrganisation(userId, { name, description, joinRequiresPassword, joinPassword }) {
   const trimmedName = String(name || "").trim();
   if (!trimmedName) {
     throw new Error("Organisation name is required.");
   }
+  const requestedJoinPassword = joinRequiresPassword
+    ? await joinPasswordFields(joinPassword)
+    : { joinPassword: null, joinPasswordHash: null };
 
   // Creating an organisation tries to provision the backing AllegroGraph
   // repository, but metadata is still saved if shared memory is temporarily full.
@@ -482,6 +526,7 @@ export async function createOrganisation(userId, { name, description }) {
     repositoryReadUsername: null,
     repositoryReadPassword: null,
     repositoryProvisioningError: null,
+    ...requestedJoinPassword,
     createdBy: userId,
     createdAt: now,
     updatedAt: now,
@@ -554,13 +599,15 @@ export async function joinOrganisation(userId, organisationId, password) {
     throw new Error("Organisation not found.");
   }
 
-  const organisation = organisations[organisationIndex];
+  let organisation = organisations[organisationIndex];
   if (membershipFor(organisation, userId)) {
     return organisationPayload(organisation, userId);
   }
-  if (organisation.joinPassword && password !== decryptJoinPassword(organisation.joinPassword)) {
+  const joinPasswordResult = await verifyOrganisationJoinPassword(organisation, password);
+  if (!joinPasswordResult.valid) {
     throw new Error("The organisation password is incorrect.");
   }
+  organisation = joinPasswordResult.migratedOrganisation;
 
   const now = new Date().toISOString();
   const nextOrganisation = {
@@ -610,7 +657,7 @@ export async function leaveOrganisation(actor, organisationId) {
   return true;
 }
 
-export async function updateOrganisation(actor, organisationId, { name, description, joinRequiresPassword }) {
+export async function updateOrganisation(actor, organisationId, { name, description, joinRequiresPassword, joinPassword }) {
   const trimmedName = String(name || "").trim();
   if (!trimmedName) {
     throw new Error("Organisation name is required.");
@@ -625,11 +672,23 @@ export async function updateOrganisation(actor, organisationId, { name, descript
   const organisation = organisations[organisationIndex];
   requireOwner(organisation, actor);
 
+  const trimmedJoinPassword = String(joinPassword || "").trim();
+  const nextJoinPassword = joinRequiresPassword
+    ? trimmedJoinPassword
+      ? await joinPasswordFields(trimmedJoinPassword)
+      : joinPasswordIsConfigured(organisation)
+        ? {
+          joinPassword: decryptJoinPassword(organisation.joinPassword) || null,
+          joinPasswordHash: organisation.joinPasswordHash || null,
+        }
+        : await joinPasswordFields(trimmedJoinPassword)
+    : { joinPassword: null, joinPasswordHash: null };
+
   const nextOrganisation = {
     ...organisation,
     name: trimmedName,
     description: String(description || "").trim() || null,
-    joinPassword: joinRequiresPassword ? decryptJoinPassword(organisation.joinPassword) || generatedJoinPassword() : null,
+    ...nextJoinPassword,
     updatedAt: new Date().toISOString(),
   };
   const nextOrganisations = [...organisations];

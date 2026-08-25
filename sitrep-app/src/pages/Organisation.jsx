@@ -79,8 +79,8 @@ const GET_ORGANISATIONS = gql`
 
 const CREATE_ORGANISATION = gql`
   ${ORGANISATION_FIELDS}
-  mutation CreateOrganisation($name: String!, $description: String) {
-    createOrganisation(name: $name, description: $description) {
+  mutation CreateOrganisation($name: String!, $description: String, $joinRequiresPassword: Boolean, $joinPassword: String) {
+    createOrganisation(name: $name, description: $description, joinRequiresPassword: $joinRequiresPassword, joinPassword: $joinPassword) {
       ...OrganisationFields
     }
   }
@@ -106,8 +106,8 @@ const JOIN_ORGANISATION = gql`
 
 const UPDATE_ORGANISATION = gql`
   ${ORGANISATION_FIELDS}
-  mutation UpdateOrganisation($id: ID!, $name: String!, $description: String, $joinRequiresPassword: Boolean!) {
-    updateOrganisation(id: $id, name: $name, description: $description, joinRequiresPassword: $joinRequiresPassword) {
+  mutation UpdateOrganisation($id: ID!, $name: String!, $description: String, $joinRequiresPassword: Boolean!, $joinPassword: String) {
+    updateOrganisation(id: $id, name: $name, description: $description, joinRequiresPassword: $joinRequiresPassword, joinPassword: $joinPassword) {
       ...OrganisationFields
     }
   }
@@ -169,10 +169,18 @@ function OrganisationSettings({ organisation, onSave, saving }) {
   const [name, setName] = useState(organisation.name);
   const [description, setDescription] = useState(organisation.description || '');
   const [joinRequiresPassword, setJoinRequiresPassword] = useState(organisation.joinRequiresPassword);
+  const [joinPassword, setJoinPassword] = useState('');
+  const canViewJoinPassword = !!organisation.joinPassword;
 
   function handleSubmit(event) {
     event.preventDefault();
-    onSave(organisation.id, { name, description, joinRequiresPassword });
+    onSave(organisation.id, {
+      name,
+      description,
+      joinRequiresPassword,
+      joinPassword: joinPassword || null,
+    });
+    setJoinPassword('');
   }
 
   return (
@@ -194,6 +202,27 @@ function OrganisationSettings({ organisation, onSave, saving }) {
         />
         Require a password to join
       </label>
+      {joinRequiresPassword && (
+        <>
+          {canViewJoinPassword && (
+            <label className="form-group">
+              Current join password
+              <input value={organisation.joinPassword} readOnly />
+            </label>
+          )}
+          <label className="form-group">
+            {organisation.joinRequiresPassword ? 'New join password' : 'Join password'}
+            <input
+              type="password"
+              value={joinPassword}
+              onChange={event => setJoinPassword(event.target.value)}
+              minLength="8"
+              required={!organisation.joinRequiresPassword}
+              placeholder={organisation.joinRequiresPassword ? 'Leave blank to keep current password' : ''}
+            />
+          </label>
+        </>
+      )}
       <button type="submit" disabled={saving}>
         {saving ? 'Saving...' : 'Save settings'}
       </button>
@@ -297,6 +326,8 @@ export default function Organisation() {
   const [selectedOrganisationId, setSelectedOrganisationId] = useState('');
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
+  const [newJoinRequiresPassword, setNewJoinRequiresPassword] = useState(false);
+  const [newJoinPassword, setNewJoinPassword] = useState('');
   const [joinSearch, setJoinSearch] = useState('');
   const [joinPasswords, setJoinPasswords] = useState({});
   const [selectedRoleId, setSelectedRoleId] = useState('owner');
@@ -377,10 +408,19 @@ export default function Organisation() {
     setFormError('');
 
     try {
-      const result = await createOrganisation({ variables: { name: newName, description: newDescription } });
+      const result = await createOrganisation({
+        variables: {
+          name: newName,
+          description: newDescription,
+          joinRequiresPassword: newJoinRequiresPassword,
+          joinPassword: newJoinRequiresPassword ? newJoinPassword : null,
+        },
+      });
       const createdOrganisation = result.data?.createOrganisation;
       setNewName('');
       setNewDescription('');
+      setNewJoinRequiresPassword(false);
+      setNewJoinPassword('');
       setMessage(createdOrganisation?.repositoryStatus === 'ready'
         ? 'Organisation created.'
         : 'Organisation created. Its data repository is pending because AllegroGraph shared memory is currently full.');
@@ -599,6 +639,10 @@ export default function Organisation() {
                 <dt>Description</dt>
                 <dd>{selectedOrganisation.description || 'No description yet.'}</dd>
               </div>
+              <div>
+                <dt>Join password</dt>
+                <dd>{selectedOrganisation.joinPassword || (selectedOrganisation.joinRequiresPassword ? 'Protected' : '-')}</dd>
+              </div>
             </dl>
           </div>
         )}
@@ -729,7 +773,27 @@ export default function Organisation() {
             Description
             <textarea value={newDescription} onChange={event => setNewDescription(event.target.value)} rows="3" />
           </label>
-          <button type="submit" disabled={creating}>
+          <label className="organisation-private-toggle">
+            <input
+              type="checkbox"
+              checked={newJoinRequiresPassword}
+              onChange={event => setNewJoinRequiresPassword(event.target.checked)}
+            />
+            Require a password to join
+          </label>
+          {newJoinRequiresPassword && (
+            <label className="form-group">
+              Join password
+              <input
+                type="password"
+                value={newJoinPassword}
+                onChange={event => setNewJoinPassword(event.target.value)}
+                minLength="8"
+                required
+              />
+            </label>
+          )}
+          <button type="submit" disabled={creating || (newJoinRequiresPassword && !newJoinPassword)}>
             {creating ? 'Creating...' : 'Create organisation'}
           </button>
         </form>

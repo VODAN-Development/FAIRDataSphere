@@ -299,11 +299,11 @@ export default `#graphql
     updateMyPassword(currentPassword: String!, newPassword: String!): Boolean!
 
     # Organisation lifecycle and membership.
-    createOrganisation(name: String!, description: String): Organisation!
+    createOrganisation(name: String!, description: String, joinRequiresPassword: Boolean, joinPassword: String): Organisation!
     provisionOrganisationRepository(id: ID!): Organisation!
     joinOrganisation(id: ID!, password: String): Organisation!
     leaveOrganisation(id: ID!): Boolean!
-    updateOrganisation(id: ID!, name: String!, description: String, joinRequiresPassword: Boolean!): Organisation!
+    updateOrganisation(id: ID!, name: String!, description: String, joinRequiresPassword: Boolean!, joinPassword: String): Organisation!
     updateOrganisationMemberRole(organisationId: ID!, userId: ID!, role: String!): Organisation!
     upsertOrganisationRole(organisationId: ID!, id: ID, name: String!, permissions: OrganisationRolePermissionsInput!): Organisation!
     deleteOrganisation(id: ID!): Boolean!
