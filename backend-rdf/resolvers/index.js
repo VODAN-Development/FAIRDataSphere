@@ -1063,11 +1063,16 @@ async function rdfEntitiesForType(entityType, organisationId, context, paginatio
   const sparqlQuery = `${PREFIXES}
     SELECT ?entity ${variables}
     WHERE {
-      ?entity rdf:type ${RDF.classes[entityType]} .
+      {
+        SELECT ?entity WHERE {
+          ?entity rdf:type ${RDF.classes[entityType]} .
+        }
+        ORDER BY STR(?entity)
+        ${paginationClause(pagination)}
+      }
       ${fieldPatterns("?entity", fields)}
     }
     ORDER BY STR(?entity)
-    ${paginationClause(pagination)}
   `;
 
   const result = await runSparqlQuery(sparqlQuery);
@@ -1964,14 +1969,21 @@ const resolvers = {
       await requireOrganisationView(context, organisationId);
       return withOrganisationRepository(organisationId, async () => {
       const itemFields = queryFields(RDF.reportItem.fields, ["entryNumber"]);
+      const entryNumberPredicate = RDF.reportItem.fields.entryNumber.predicate;
       const sparqlQuery = `${PREFIXES}
         SELECT ?item ${selectVariables(itemFields)}
         WHERE {
-          ?item rdf:type ${RDF.classes.reportItem} .
+          {
+            SELECT ?item ?entryNumber WHERE {
+              ?item rdf:type ${RDF.classes.reportItem} ;
+                    ${entryNumberPredicate} ?entryNumber .
+            }
+            ORDER BY DESC(?entryNumber)
+            ${paginationClause({ limit, offset })}
+          }
           ${fieldPatterns("?item", itemFields)}
         }
         ORDER BY DESC(?entryNumber)
-        ${paginationClause({ limit, offset })}
       `;
 
       const result = await runSparqlQuery(sparqlQuery);
@@ -2024,14 +2036,19 @@ const resolvers = {
       const sparqlQuery = `${PREFIXES}
         SELECT ?report ?id ${selectVariables(reportFields)}
         WHERE {
-          ?report rdf:type ${RDF.classes.report} .
-          FILTER(STRSTARTS(STR(?report), "${reportIdBase}"))
+          {
+            SELECT ?report ?id WHERE {
+              ?report rdf:type ${RDF.classes.report} .
+              FILTER(STRSTARTS(STR(?report), "${reportIdBase}"))
+              BIND(REPLACE(STR(?report), "${reportIdBase}", "") AS ?id)
+              FILTER(REGEX(?id, "^[0-9]+$"))
+            }
+            ORDER BY DESC(?id)
+            ${paginationClause({ limit, offset })}
+          }
           ${fieldPatterns("?report", reportFields)}
-          BIND(REPLACE(STR(?report), "${reportIdBase}", "") AS ?id)
-          FILTER(REGEX(?id, "^[0-9]+$"))
         }
         ORDER BY DESC(?id)
-        ${paginationClause({ limit, offset })}
       `;
 
       const result = await runSparqlQuery(sparqlQuery);
