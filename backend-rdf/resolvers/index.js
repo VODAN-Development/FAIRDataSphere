@@ -1097,6 +1097,23 @@ async function rdfEntitiesForType(entityType, organisationId, context, paginatio
   });
 }
 
+async function rdfEntityCountForType(entityType, organisationId, context) {
+  await requireOrganisationView(context, organisationId);
+  return withOrganisationRepository(organisationId, async () => {
+    if (!RDF.classes?.[entityType]) throw new Error(`Unknown RDF entity type: ${entityType}`);
+    if (entityType === "report") return 0;
+    if (entityType === "reportItem") return resolvers.Query.reportItemCount(null, { organisationId }, context);
+
+    const result = await runSparqlQuery(`${PREFIXES}
+      SELECT (COUNT(DISTINCT ?entity) AS ?count)
+      WHERE {
+        ?entity rdf:type ${RDF.classes[entityType]} .
+      }
+    `);
+    return parseInt(result.results.bindings[0]?.count?.value || "0", 10);
+  });
+}
+
 function subjectFromEntityIdentifier(entityType, id, uri) {
   return uri ? termToIri(uri) : entityUri(entityType, id);
 }
@@ -1963,6 +1980,8 @@ const resolvers = {
 
     rdfEntities: async (_, { entityType, organisationId, limit, offset }, context) => rdfEntitiesForType(entityType, organisationId, context, { limit, offset }),
 
+    rdfEntityCount: async (_, { entityType, organisationId }, context) => rdfEntityCountForType(entityType, organisationId, context),
+
     reportItems: async (_, { organisationId, limit, offset }, context) => {
       // Report items are aggregated by URI because optional fields can produce
       // multiple SPARQL bindings for the same item.
@@ -2002,6 +2021,21 @@ const resolvers = {
       }
 
       return items;
+      });
+    },
+
+    reportItemCount: async (_, { organisationId }, context) => {
+      await requireOrganisationView(context, organisationId);
+      return withOrganisationRepository(organisationId, async () => {
+        const entryNumberPredicate = RDF.reportItem.fields.entryNumber.predicate;
+        const result = await runSparqlQuery(`${PREFIXES}
+          SELECT (COUNT(DISTINCT ?item) AS ?count)
+          WHERE {
+            ?item rdf:type ${RDF.classes.reportItem} ;
+                  ${entryNumberPredicate} ?entryNumber .
+          }
+        `);
+        return parseInt(result.results.bindings[0]?.count?.value || "0", 10);
       });
     },
 
@@ -2062,6 +2096,23 @@ const resolvers = {
       }
 
       return reports;
+      });
+    },
+
+    reportCount: async (_, { organisationId }, context) => {
+      await requireOrganisationView(context, organisationId);
+      return withOrganisationRepository(organisationId, async () => {
+        const reportIdBase = entityIdReplacePattern("report");
+        const result = await runSparqlQuery(`${PREFIXES}
+          SELECT (COUNT(DISTINCT ?report) AS ?count)
+          WHERE {
+            ?report rdf:type ${RDF.classes.report} .
+            FILTER(STRSTARTS(STR(?report), "${reportIdBase}"))
+            BIND(REPLACE(STR(?report), "${reportIdBase}", "") AS ?id)
+            FILTER(REGEX(?id, "^[0-9]+$"))
+          }
+        `);
+        return parseInt(result.results.bindings[0]?.count?.value || "0", 10);
       });
     },
 

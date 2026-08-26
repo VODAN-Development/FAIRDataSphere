@@ -442,6 +442,17 @@ function compiledReportBodyHtml(compiledReport) {
   return compiledReport.bodyHtml || '';
 }
 
+function reportItemMatchesSearch(item, search) {
+  const query = String(search || '').trim().toLowerCase();
+  if (!query) return true;
+  const haystack = [
+    item.entryNumber,
+    itemTitle(item),
+    ...(item.fieldValues || []).map(field => field.value),
+  ].filter(Boolean).join(' ').toLowerCase();
+  return haystack.includes(query);
+}
+
 function compiledReportEditableMarkdown(compiledReport) {
   return compiledReport.bodyMarkdown || htmlToPlainMarkdown(compiledReport.bodyHtml || '');
 }
@@ -588,6 +599,9 @@ export default function Reports() {
   const [fieldErrors, setFieldErrors] = useState({});
   const [error, setError] = useState('');
   const [reportAddSelection, setReportAddSelection] = useState({});
+  const [reportAddSearch, setReportAddSearch] = useState({});
+  const [itemSelectionSearch, setItemSelectionSearch] = useState('');
+  const [automationItemSearch, setAutomationItemSearch] = useState('');
   const [selectedReportId, setSelectedReportId] = useState('');
   const [isCreatingReport, setIsCreatingReport] = useState(false);
   const [editingReportId, setEditingReportId] = useState('');
@@ -602,9 +616,10 @@ export default function Reports() {
   const [hasMoreReports, setHasMoreReports] = useState(true);
 
   const queryVariables = { organisationId: activeOrganisationId, limit: PAGE_SIZE, offset: 0 };
+  const allReportItemsVariables = { organisationId: activeOrganisationId };
   const refetchScopedQueries = [
     { query: GET_REPORTS, variables: queryVariables },
-    { query: GET_REPORT_ITEMS, variables: queryVariables },
+    { query: GET_REPORT_ITEMS, variables: allReportItemsVariables },
     { query: GET_COMPILED_REPORTS, variables: queryVariables },
     { query: GET_COMPILED_REPORT_CONFIG, variables: queryVariables },
     { query: GET_REPORT_AUTOMATIONS, variables: queryVariables },
@@ -614,7 +629,7 @@ export default function Reports() {
     skip: !activeOrganisationId && !activeOrganisationIsUnscoped,
   });
   const { data: itemsData, loading: itemsLoading, error: itemsError, refetch: refetchItems } = useQuery(GET_REPORT_ITEMS, {
-    variables: queryVariables,
+    variables: allReportItemsVariables,
     skip: !activeOrganisationId && !activeOrganisationIsUnscoped,
   });
   const { data: reportsData, loading: reportsLoading, error: reportsError, refetch: refetchReports, fetchMore: fetchMoreReports } = useQuery(GET_REPORTS, {
@@ -672,6 +687,14 @@ export default function Reports() {
     return Object.fromEntries(fields.map(field => [field.name, formData[field.name] ?? emptyValueFor(field)]));
   }, [fields, formData]);
   const reportItems = useMemo(() => itemsData?.reportItems || [], [itemsData]);
+  const searchableReportItems = useMemo(
+    () => reportItems.filter(item => reportItemMatchesSearch(item, itemSelectionSearch)),
+    [itemSelectionSearch, reportItems]
+  );
+  const searchableAutomationItems = useMemo(
+    () => reportItems.filter(item => reportItemMatchesSearch(item, automationItemSearch)),
+    [automationItemSearch, reportItems]
+  );
   const reports = useMemo(() => reportsData?.reports || [], [reportsData]);
   const compiledReports = useMemo(() => compiledReportsData?.compiledReports || [], [compiledReportsData]);
   const automations = useMemo(() => automationsData?.reportAutomations || [], [automationsData]);
@@ -1121,6 +1144,13 @@ export default function Reports() {
     return reportItems.find(item => Number(item.entryNumber) === Number(itemId));
   };
 
+  const availableItemsForReport = (report) => {
+    const search = reportAddSearch[report.id] || '';
+    return reportItems
+      .filter(item => !reportHasItem(report, item))
+      .filter(item => reportItemMatchesSearch(item, search));
+  };
+
   function renderAutomationPanel() {
     if (!activeOrganisationCanWrite || !automationDraft) return null;
     return (
@@ -1223,8 +1253,15 @@ export default function Reports() {
           {automationDraft.itemSelectionMode === 'manual' && (
             <div className="report-automation-section">
               <strong>Report items</strong>
+              <input
+                type="search"
+                className="item-search-input"
+                placeholder="Search item number or text"
+                value={automationItemSearch}
+                onChange={(event) => setAutomationItemSearch(event.target.value)}
+              />
               <div className="compiled-checkbox-list">
-                {reportItems.map(item => (
+                {searchableAutomationItems.map(item => (
                   <label key={item.entryNumber} className="compiled-checkbox">
                     <input
                       type="checkbox"
@@ -1234,6 +1271,9 @@ export default function Reports() {
                     {itemTitle(item)}
                   </label>
                 ))}
+                {reportItems.length > 0 && searchableAutomationItems.length === 0 && (
+                  <p className="no-items-message">No matching report items.</p>
+                )}
               </div>
             </div>
           )}
@@ -1431,11 +1471,18 @@ export default function Reports() {
 
                 <div className="form-group">
                   <label>Select Report Items:</label>
+                  <input
+                    type="search"
+                    className="item-search-input"
+                    placeholder="Search item number or text"
+                    value={itemSelectionSearch}
+                    onChange={(event) => setItemSelectionSearch(event.target.value)}
+                  />
                   <div className="items-selection">
                     {reportItems.length === 0 ? (
                       <p className="no-items-message">No report items available. Create some items first on the Data Input page.</p>
                     ) : (
-                      reportItems.map(item => {
+                      searchableReportItems.map(item => {
                         const itemId = Number(item.entryNumber);
 
                         return (
@@ -1452,6 +1499,9 @@ export default function Reports() {
                           </div>
                         );
                       })
+                    )}
+                    {reportItems.length > 0 && searchableReportItems.length === 0 && (
+                      <p className="no-items-message">No matching report items.</p>
                     )}
                   </div>
                 </div>
@@ -1612,7 +1662,16 @@ export default function Reports() {
                             />
                             {itemTitle(item)}
                           </label>
-                        ) : null;
+                        ) : (
+                          <label key={itemId} className="compiled-checkbox">
+                            <input
+                              type="checkbox"
+                              checked={compileItemIds.has(Number(itemId))}
+                              onChange={() => toggleCompileItem(itemId)}
+                            />
+                            Report item #{itemId}
+                          </label>
+                        );
                       })}
                     </div>
                   </div>
@@ -1665,16 +1724,38 @@ export default function Reports() {
                             )}
                           </div>
                         </div>
-                      ) : null;
+                      ) : (
+                        <div key={itemId} className="report-item-entry">
+                          <div className="report-item-entry-header">
+                            <h5>Report item #{itemId}</h5>
+                            {activeOrganisationCanWrite && (
+                              <button
+                                className="remove-item-btn"
+                                title="Remove from report"
+                                onClick={() => handleRemoveItemFromReport(selectedReport.id, itemId)}
+                              >
+                                x
+                              </button>
+                            )}
+                          </div>
+                          <div className="report-meta-inline">Linked to this report, but item details were not found.</div>
+                        </div>
+                      );
                     })
                   )}
                 </div>
                 {activeOrganisationCanWrite && reportItems.length > 0 && (() => {
-                  const available = reportItems.filter(it => !reportHasItem(selectedReport, it));
-                  if (available.length === 0) return null;
+                  const available = availableItemsForReport(selectedReport);
                   return (
                     <div className="add-item-entry">
                       <label htmlFor={`add-item-${selectedReport.id}`}>Add item:</label>
+                      <input
+                        type="search"
+                        className="item-search-input"
+                        placeholder="Search item number or text"
+                        value={reportAddSearch[selectedReport.id] || ''}
+                        onChange={(e) => setReportAddSearch({ ...reportAddSearch, [selectedReport.id]: e.target.value })}
+                      />
                       <select
                         id={`add-item-${selectedReport.id}`}
                         value={reportAddSelection[selectedReport.id] || ''}
@@ -1687,6 +1768,9 @@ export default function Reports() {
                           </option>
                         ))}
                       </select>
+                      {available.length === 0 && (
+                        <span className="report-meta-inline">No matching items available.</span>
+                      )}
                       <button
                         className="generate-btn"
                         onClick={() => handleAddItemToExistingReport(selectedReport.id)}

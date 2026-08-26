@@ -1769,9 +1769,11 @@ nav a button {
   margin-top: 0.75rem;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
-.add-item-entry select {
+.add-item-entry select,
+.add-item-entry .item-search-input {
   padding: 0.3rem;
 }
 .add-item-entry button {
@@ -3050,9 +3052,81 @@ nav a button {
   gap: 0.75rem;
 }
 
-.load-more-button {
-  align-self: center;
-  margin-top: 0.25rem;
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 6px;
+  background-color: var(--color-surface);
+}
+
+.pagination-summary {
+  color: var(--color-on-surface-muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.pagination-pages {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.pagination-page-slot {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.pagination-page {
+  min-width: 2rem;
+  min-height: 2rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--color-border-muted);
+  border-radius: 4px;
+  background-color: var(--color-surface-raised);
+  color: var(--color-on-surface);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.pagination-page:hover,
+.pagination-page.active {
+  border-color: var(--color-primary);
+  background-color: var(--color-accent-container);
+  color: var(--color-primary);
+}
+
+.pagination-page:disabled {
+  cursor: default;
+}
+
+.pagination-ellipsis {
+  color: var(--color-on-surface-muted);
+  font-weight: 700;
+}
+
+.page-size-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--color-on-surface-muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.page-size-control select {
+  min-height: 2rem;
+  padding: 0.25rem 0.45rem;
+  border: 1px solid var(--color-border-muted);
+  border-radius: 4px;
+  background-color: var(--color-surface-raised);
+  color: var(--color-on-surface);
 }
 
 .entity-instance-card {
@@ -3184,6 +3258,16 @@ nav a button {
   background-color: var(--color-surface);
   border: 1px solid var(--color-border-muted);
   border-radius: 4px;
+}
+
+.item-search-input {
+  width: min(100%, 24rem);
+  min-height: 2.1rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--color-border-muted);
+  border-radius: 4px;
+  background-color: var(--color-surface);
+  color: var(--color-on-surface);
 }
 
 .item-checkbox-container {

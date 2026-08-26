@@ -276,11 +276,14 @@ export default `#graphql
     rdfStructure(organisationId: ID): RdfStructure!
     rdfStructurePresets(organisationId: ID): [RdfStructurePreset!]!
     rdfEntities(entityType: String!, organisationId: ID, limit: Int, offset: Int): [RdfEntity!]!
+    rdfEntityCount(entityType: String!, organisationId: ID): Int!
 
     # Report-item and report retrieval.
     reportItems(organisationId: ID, limit: Int, offset: Int): [ReportItem!]!
+    reportItemCount(organisationId: ID): Int!
     reportItem(id: ID!, organisationId: ID): ReportItem
     reports(organisationId: ID, limit: Int, offset: Int): [Report!]!
+    reportCount(organisationId: ID): Int!
     report(id: ID!, organisationId: ID): Report
 
     # Compiled report retrieval.

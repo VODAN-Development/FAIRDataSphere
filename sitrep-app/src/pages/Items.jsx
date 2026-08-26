@@ -74,6 +74,7 @@ const GET_RDF_ENTITIES = gql`
         ...RdfFieldValueFields
       }
     }
+    rdfEntityCount(entityType: $entityType, organisationId: $organisationId)
   }
 `;
 
@@ -93,6 +94,7 @@ const GET_REPORT_ITEMS = gql`
         ...RdfFieldValueFields
       }
     }
+    reportItemCount(organisationId: $organisationId)
   }
 `;
 
@@ -174,7 +176,60 @@ function entityTitle(entity) {
   return primaryValue || `${titleForEntity(entity.entityType)} #${entity.id}`;
 }
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE_OPTIONS = [25, 50, 100];
+const DEFAULT_PAGE_SIZE = 25;
+
+function PaginationControls({ pageIndex, pageSize, totalCount, onPageChange, onPageSizeChange, disabled }) {
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const currentPage = Math.min(pageIndex + 1, totalPages);
+  const start = totalCount === 0 ? 0 : pageIndex * pageSize + 1;
+  const end = Math.min(totalCount, (pageIndex + 1) * pageSize);
+  const pages = Array.from({ length: totalPages }, (_, index) => index + 1)
+    .filter(page => (
+      page === 1
+      || page === totalPages
+      || Math.abs(page - currentPage) <= 2
+    ));
+
+  return (
+    <div className="pagination-bar">
+      <div className="pagination-summary">
+        {totalCount === 0 ? 'No items' : `${start}-${end} of ${totalCount}`}
+      </div>
+      <div className="pagination-pages" aria-label="Pages">
+        {pages.map((page, index) => {
+          const previousPage = pages[index - 1];
+          return (
+            <span key={page} className="pagination-page-slot">
+              {previousPage && page - previousPage > 1 && <span className="pagination-ellipsis">...</span>}
+              <button
+                type="button"
+                className={`pagination-page${page === currentPage ? ' active' : ''}`}
+                onClick={() => onPageChange(page - 1)}
+                disabled={disabled || page === currentPage}
+                aria-current={page === currentPage ? 'page' : undefined}
+              >
+                {page}
+              </button>
+            </span>
+          );
+        })}
+      </div>
+      <label className="page-size-control">
+        Per page
+        <select
+          value={pageSize}
+          onChange={(event) => onPageSizeChange(Number(event.target.value))}
+          disabled={disabled}
+        >
+          {PAGE_SIZE_OPTIONS.map(option => (
+            <option key={option} value={option}>{option}</option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
 
 export default function Items() {
   // Items displays built-in report items and custom RDF entities, with dynamic
@@ -186,14 +241,18 @@ export default function Items() {
   const [fieldErrors, setFieldErrors] = useState({});
   const [editingKey, setEditingKey] = useState('');
   const [editValues, setEditValues] = useState({});
+  const [itemPageIndex, setItemPageIndex] = useState(0);
+  const [entityPageIndex, setEntityPageIndex] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
 
-  const queryVariables = { organisationId: activeOrganisationId, limit: PAGE_SIZE, offset: 0 };
+  const reportItemVariables = { organisationId: activeOrganisationId, limit: pageSize, offset: itemPageIndex * pageSize };
+  const reportsVariables = { organisationId: activeOrganisationId };
   const refetchScopedQueries = [
-    { query: GET_REPORT_ITEMS, variables: queryVariables },
-    { query: GET_REPORTS, variables: queryVariables },
+    { query: GET_REPORT_ITEMS, variables: reportItemVariables },
+    { query: GET_REPORTS, variables: reportsVariables },
   ];
   const { data: structureData, loading: structureLoading, error: structureError } = useQuery(GET_RDF_STRUCTURE, {
-    variables: queryVariables,
+    variables: { organisationId: activeOrganisationId },
     skip: !activeOrganisationId && !activeOrganisationIsUnscoped,
   });
   const structure = useMemo(() => {
@@ -215,22 +274,20 @@ export default function Items() {
       ? 'reportItem'
       : entityTypes[0] || '';
 
-  const [hasMoreItems, setHasMoreItems] = useState(true);
-  const [hasMoreEntities, setHasMoreEntities] = useState(true);
-
-  const { data: entitiesData, loading: entitiesLoading, error: entitiesError, refetch: refetchEntities, fetchMore: fetchMoreEntities } = useQuery(
+  const entityVariables = { entityType: activeEntityType, organisationId: activeOrganisationId, limit: pageSize, offset: entityPageIndex * pageSize };
+  const { data: entitiesData, loading: entitiesLoading, error: entitiesError, refetch: refetchEntities } = useQuery(
     GET_RDF_ENTITIES,
     {
-      variables: { entityType: activeEntityType, organisationId: activeOrganisationId, limit: PAGE_SIZE, offset: 0 },
+      variables: entityVariables,
       skip: (!activeOrganisationId && !activeOrganisationIsUnscoped) || !activeEntityType || activeEntityType === 'reportItem',
     }
   );
-  const { data: itemsData, loading: itemsLoading, error: itemsError, refetch: refetchItems, fetchMore: fetchMoreItems } = useQuery(GET_REPORT_ITEMS, {
-    variables: queryVariables,
+  const { data: itemsData, loading: itemsLoading, error: itemsError, refetch: refetchItems } = useQuery(GET_REPORT_ITEMS, {
+    variables: reportItemVariables,
     skip: !activeOrganisationId && !activeOrganisationIsUnscoped,
   });
   const { data: reportsData, loading: reportsLoading, error: reportsError, refetch: refetchReports } = useQuery(GET_REPORTS, {
-    variables: queryVariables,
+    variables: reportsVariables,
     skip: !activeOrganisationId && !activeOrganisationIsUnscoped,
   });
   const [deleteReportItem] = useMutation(DELETE_REPORT_ITEM, {
@@ -266,44 +323,36 @@ export default function Items() {
   }, [refetchItems, refetchReports, refetchEntities, activeEntityType]);
 
   useEffect(() => {
-    setHasMoreItems(true);
-    setHasMoreEntities(true);
+    setItemPageIndex(0);
+    setEntityPageIndex(0);
   }, [activeEntityType, activeOrganisationId]);
 
+  useEffect(() => {
+    setItemPageIndex(0);
+    setEntityPageIndex(0);
+  }, [pageSize]);
+
   const reportItems = itemsData?.reportItems || [];
+  const reportItemCount = itemsData?.reportItemCount || 0;
   const reports = reportsData?.reports || [];
   const entities = entitiesData?.rdfEntities || [];
+  const entityCount = entitiesData?.rdfEntityCount || 0;
   const loading = structureLoading || itemsLoading || reportsLoading || entitiesLoading;
   const error = actionError || structureError?.message || itemsError?.message || reportsError?.message || entitiesError?.message;
   const reportsAvailableForItem = (item) => reports.filter(report =>
     !(report.selectedItemIds || []).some(itemId => Number(itemId) === Number(item.entryNumber))
   );
 
-  const loadMoreReportItems = async () => {
-    const result = await fetchMoreItems({
-      variables: { ...queryVariables, offset: reportItems.length },
-      updateQuery: (previous, { fetchMoreResult }) => ({
-        reportItems: [
-          ...(previous.reportItems || []),
-          ...(fetchMoreResult?.reportItems || []),
-        ],
-      }),
-    });
-    setHasMoreItems((result.data?.reportItems || []).length === PAGE_SIZE);
-  };
+  useEffect(() => {
+    const lastPageIndex = Math.max(0, Math.ceil(reportItemCount / pageSize) - 1);
+    if (itemPageIndex > lastPageIndex) setItemPageIndex(lastPageIndex);
+  }, [itemPageIndex, pageSize, reportItemCount]);
 
-  const loadMoreEntities = async () => {
-    const result = await fetchMoreEntities({
-      variables: { entityType: activeEntityType, organisationId: activeOrganisationId, limit: PAGE_SIZE, offset: entities.length },
-      updateQuery: (previous, { fetchMoreResult }) => ({
-        rdfEntities: [
-          ...(previous.rdfEntities || []),
-          ...(fetchMoreResult?.rdfEntities || []),
-        ],
-      }),
-    });
-    setHasMoreEntities((result.data?.rdfEntities || []).length === PAGE_SIZE);
-  };
+  useEffect(() => {
+    const lastPageIndex = Math.max(0, Math.ceil(entityCount / pageSize) - 1);
+    if (entityPageIndex > lastPageIndex) setEntityPageIndex(lastPageIndex);
+  }, [entityCount, entityPageIndex, pageSize]);
+
   const startEditing = (key, fields) => {
     setActionError('');
     setFieldErrors({});
@@ -454,6 +503,14 @@ export default function Items() {
               <p>No items submitted yet.</p>
             ) : (
               <div className="entity-instance-list">
+                <PaginationControls
+                  pageIndex={itemPageIndex}
+                  pageSize={pageSize}
+                  totalCount={reportItemCount}
+                  onPageChange={setItemPageIndex}
+                  onPageSizeChange={setPageSize}
+                  disabled={loading}
+                />
                 {reportItems.map(item => {
                   const availableReports = reportsAvailableForItem(item);
                   const itemEditKey = `reportItem:${item.entryNumber}`;
@@ -573,11 +630,14 @@ export default function Items() {
                     </div>
                   );
                 })}
-                {hasMoreItems && reportItems.length >= PAGE_SIZE && (
-                  <button type="button" className="secondary-btn load-more-button" onClick={loadMoreReportItems} disabled={loading}>
-                    Load more
-                  </button>
-                )}
+                <PaginationControls
+                  pageIndex={itemPageIndex}
+                  pageSize={pageSize}
+                  totalCount={reportItemCount}
+                  onPageChange={setItemPageIndex}
+                  onPageSizeChange={setPageSize}
+                  disabled={loading}
+                />
               </div>
             )
           ) : (
@@ -585,6 +645,14 @@ export default function Items() {
               <p>No {titleForEntity(activeEntityType).toLowerCase()} instances found.</p>
             ) : (
               <div className="entity-instance-list">
+                <PaginationControls
+                  pageIndex={entityPageIndex}
+                  pageSize={pageSize}
+                  totalCount={entityCount}
+                  onPageChange={setEntityPageIndex}
+                  onPageSizeChange={setPageSize}
+                  disabled={loading}
+                />
                 {entities.map(entity => (
                   (() => {
                     const entityEditKey = `${entity.entityType}:${entity.uri}`;
@@ -657,11 +725,14 @@ export default function Items() {
                     );
                   })()
                 ))}
-                {hasMoreEntities && entities.length >= PAGE_SIZE && (
-                  <button type="button" className="secondary-btn load-more-button" onClick={loadMoreEntities} disabled={loading}>
-                    Load more
-                  </button>
-                )}
+                <PaginationControls
+                  pageIndex={entityPageIndex}
+                  pageSize={pageSize}
+                  totalCount={entityCount}
+                  onPageChange={setEntityPageIndex}
+                  onPageSizeChange={setPageSize}
+                  disabled={loading}
+                />
               </div>
             )
           )}
