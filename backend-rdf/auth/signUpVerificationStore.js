@@ -92,7 +92,30 @@ async function verifyCaptcha(token, remoteIp) {
     throw new Error("Captcha verification failed. Please try again.");
   }
 
-  if (!result.success || result.action !== "signup" || !hostnames.has(result.hostname)) {
+  if (!result.success) {
+    console.error("Turnstile validation failed", {
+      errorCodes: result["error-codes"] || [],
+      hostname: result.hostname || null,
+      action: result.action || null,
+    });
+    throw new Error("Captcha verification failed. Please try again.");
+  }
+
+  if (result.action !== "signup") {
+    console.error("Turnstile action mismatch", {
+      expectedAction: "signup",
+      action: result.action || null,
+      hostname: result.hostname || null,
+    });
+    throw new Error("Captcha verification failed. Please try again.");
+  }
+
+  if (!hostnames.has(result.hostname)) {
+    console.error("Turnstile hostname mismatch", {
+      expectedHostnames: Array.from(hostnames),
+      hostname: result.hostname || null,
+      action: result.action || null,
+    });
     throw new Error("Captcha verification failed. Please try again.");
   }
 }
