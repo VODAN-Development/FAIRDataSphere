@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { decryptFieldValueSafe, encryptFieldValue } from "../services/fieldEncryption.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { authenticateUser, createUser, updateUserPassword, updateUserProfile } from "../auth/authStore.js";
+import { authenticateUser, createUser, deleteUser, listUsers, updateUserPassword, updateUserProfile } from "../auth/authStore.js";
 import {
   canViewOrganisation,
   canWriteOrganisation,
@@ -19,6 +19,7 @@ import {
   organisationRdfStructureJson,
   organisationRepositoryConfig,
   provisionOrganisationRepository,
+  removeUserFromOrganisations,
   rdfStructurePresetJson,
   saveOrganisationRdfStructurePreset,
   upsertOrganisationRole,
@@ -26,7 +27,7 @@ import {
   updateOrganisation,
   updateOrganisationMemberRole,
 } from "../auth/organisationStore.js";
-import { requireAuth } from "../auth/requireAuth.js";
+import { requireAdmin, requireAuth } from "../auth/requireAuth.js";
 import { createSessionToken, sessionCookieName, sessionCookieOptions } from "../auth/tokens.js";
 import {
   PREFIXES,
@@ -1976,6 +1977,11 @@ const resolvers = {
   Query: {
     me: async (_, __, context) => context.currentUser,
 
+    users: async (_, __, context) => {
+      requireAdmin(context);
+      return listUsers();
+    },
+
     organisations: async (_, __, context) => listOrganisations(context.currentUser),
 
     myOrganisations: async (_, __, context) => listMyOrganisations(context.currentUser),
@@ -2212,6 +2218,15 @@ const resolvers = {
       const user = requireAuth(context);
       await updateUserPassword(user.id, { currentPassword, newPassword });
       return true;
+    },
+
+    deleteUser: async (_, { id }, context) => {
+      const user = requireAdmin(context);
+      if (user.id === id) {
+        throw new Error("You cannot delete your own account.");
+      }
+      await removeUserFromOrganisations(id);
+      return deleteUser(id);
     },
 
     createOrganisation: async (_, { name, description, joinRequiresPassword, joinPassword }, context) => {

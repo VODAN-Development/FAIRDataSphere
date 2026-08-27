@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { gql, useMutation } from '@apollo/client';
+import { gql, useMutation, useQuery } from '@apollo/client';
 import { useAuth } from '../auth/useAuth.js';
 
 const UPDATE_MY_ACCOUNT = gql`
@@ -19,24 +19,57 @@ const UPDATE_MY_PASSWORD = gql`
   }
 `;
 
+const USERS = gql`
+  query Users {
+    users {
+      id
+      email
+      name
+      role
+    }
+  }
+`;
+
+const DELETE_USER = gql`
+  mutation DeleteUser($id: ID!) {
+    deleteUser(id: $id) {
+      id
+      email
+      name
+      role
+    }
+  }
+`;
+
 export default function Account() {
   // Account keeps profile, password, and role details in separate panels while
   // sharing the current user from AuthProvider.
   const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [activePanel, setActivePanel] = useState('profile');
   const [name, setName] = useState(user?.name || '');
   const [email, setEmail] = useState(user?.email || '');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [selectedUserId, setSelectedUserId] = useState('');
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
   const [profileMessage, setProfileMessage] = useState('');
   const [passwordMessage, setPasswordMessage] = useState('');
+  const [adminMessage, setAdminMessage] = useState('');
   const [profileError, setProfileError] = useState('');
   const [passwordError, setPasswordError] = useState('');
+  const [adminError, setAdminError] = useState('');
   const [updateMyAccount, { loading: savingProfile }] = useMutation(UPDATE_MY_ACCOUNT, {
     refetchQueries: ['Me'],
   });
   const [updateMyPassword, { loading: savingPassword }] = useMutation(UPDATE_MY_PASSWORD);
+  const { data: usersData, loading: usersLoading } = useQuery(USERS, {
+    skip: !isAdmin,
+  });
+  const [deleteUser, { loading: deletingUser }] = useMutation(DELETE_USER, {
+    refetchQueries: ['Users', 'Organisations', 'MyOrganisations'],
+  });
 
   async function handleProfileSubmit(event) {
     event.preventDefault();
@@ -73,11 +106,45 @@ export default function Account() {
     }
   }
 
+  async function handleDeleteUserSubmit(event) {
+    event.preventDefault();
+    setAdminError('');
+    setAdminMessage('');
+
+    const selectedUser = usersData?.users?.find(candidate => candidate.id === selectedUserId);
+    if (!selectedUser) {
+      setAdminError('Select a user to delete.');
+      return;
+    }
+    if (selectedUser.id === user.id) {
+      setAdminError('You cannot delete your own account.');
+      return;
+    }
+    if (deleteConfirmation.trim().toLowerCase() !== selectedUser.email.toLowerCase()) {
+      setAdminError('Type the user email address to confirm deletion.');
+      return;
+    }
+
+    try {
+      await deleteUser({ variables: { id: selectedUser.id } });
+      setSelectedUserId('');
+      setDeleteConfirmation('');
+      setAdminMessage(`${selectedUser.email} was deleted.`);
+    } catch (error) {
+      setAdminError(error.message);
+    }
+  }
+
   const panelOptions = [
     { id: 'profile', label: 'Profile' },
     { id: 'password', label: 'Password' },
     { id: 'role', label: 'Role' },
+    ...(isAdmin ? [{ id: 'admin', label: 'Admin options' }] : []),
   ];
+
+  const selectableUsers = (usersData?.users || []).filter(candidate => candidate.id !== user?.id);
+  const selectedUser = selectableUsers.find(candidate => candidate.id === selectedUserId);
+  const visiblePanel = activePanel === 'admin' && !isAdmin ? 'profile' : activePanel;
 
   function renderProfilePanel() {
     return (
@@ -186,9 +253,76 @@ export default function Account() {
     );
   }
 
+  function renderAdminPanel() {
+    return (
+      <section className="account-detail-section">
+        <div className="rdf-editor-heading">
+          <h3>Admin options</h3>
+        </div>
+
+        <form className="account-admin-panel" onSubmit={handleDeleteUserSubmit}>
+          <h4>Delete user</h4>
+          {adminError && <div className="error-message">{adminError}</div>}
+          {adminMessage && <div className="success-message">{adminMessage}</div>}
+
+          <label className="form-group">
+            User
+            <select
+              value={selectedUserId}
+              onChange={event => {
+                setSelectedUserId(event.target.value);
+                setDeleteConfirmation('');
+                setAdminError('');
+                setAdminMessage('');
+              }}
+              disabled={usersLoading || deletingUser}
+              required
+            >
+              <option value="">{usersLoading ? 'Loading users...' : 'Select a user'}</option>
+              {selectableUsers.map(candidate => (
+                <option key={candidate.id} value={candidate.id}>
+                  {candidate.name ? `${candidate.name} - ${candidate.email}` : candidate.email} ({candidate.role})
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {selectedUser && (
+            <div className="account-delete-summary">
+              <strong>{selectedUser.name || selectedUser.email}</strong>
+              <span>{selectedUser.email}</span>
+              <span>{selectedUser.role}</span>
+            </div>
+          )}
+
+          <label className="form-group">
+            Confirm email
+            <input
+              type="text"
+              value={deleteConfirmation}
+              onChange={event => setDeleteConfirmation(event.target.value)}
+              placeholder={selectedUser?.email || ''}
+              disabled={!selectedUser || deletingUser}
+              required
+            />
+          </label>
+
+          <button
+            type="submit"
+            className="account-delete-button"
+            disabled={!selectedUser || deletingUser}
+          >
+            {deletingUser ? 'Deleting...' : 'Delete user'}
+          </button>
+        </form>
+      </section>
+    );
+  }
+
   function renderActivePanel() {
-    if (activePanel === 'password') return renderPasswordPanel();
-    if (activePanel === 'role') return renderRolePanel();
+    if (visiblePanel === 'admin' && isAdmin) return renderAdminPanel();
+    if (visiblePanel === 'password') return renderPasswordPanel();
+    if (visiblePanel === 'role') return renderRolePanel();
     return renderProfilePanel();
   }
 
@@ -220,10 +354,10 @@ export default function Account() {
               <button
                 key={option.id}
                 type="button"
-                className={`account-option-button${activePanel === option.id ? ' active' : ''}`}
+                className={`account-option-button${visiblePanel === option.id ? ' active' : ''}`}
                 onClick={() => setActivePanel(option.id)}
                 role="tab"
-                aria-selected={activePanel === option.id}
+                aria-selected={visiblePanel === option.id}
               >
                 {option.label}
               </button>

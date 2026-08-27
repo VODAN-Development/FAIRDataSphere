@@ -533,6 +533,73 @@ nav a button {
   justify-self: center;
 }
 
+.account-admin-panel {
+  display: grid;
+  gap: 1rem;
+  width: min(100%, 560px);
+  justify-self: center;
+  padding: 1rem;
+  border: 1px solid var(--color-border-danger);
+  border-radius: 6px;
+  background-color: var(--color-danger-surface);
+}
+
+.account-admin-panel h4 {
+  margin: 0;
+  color: var(--color-on-surface);
+}
+
+.account-admin-panel select,
+.account-admin-panel input {
+  width: 100%;
+  min-height: 2.25rem;
+  box-sizing: border-box;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--color-disabled);
+  border-radius: 4px;
+  background-color: var(--color-surface);
+  color: var(--color-on-surface);
+  font: inherit;
+}
+
+.account-delete-summary {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border-danger);
+  border-radius: 6px;
+  background-color: var(--color-danger-container);
+  color: var(--color-on-danger-container);
+}
+
+.account-delete-summary strong,
+.account-delete-summary span {
+  overflow-wrap: anywhere;
+}
+
+.account-delete-summary span {
+  font-size: 0.88rem;
+}
+
+.account-delete-button {
+  justify-self: start;
+  padding: 0.6em 1.2em;
+  border: none;
+  border-radius: 4px;
+  background-color: var(--color-error);
+  color: var(--color-on-primary);
+  font-weight: 700;
+}
+
+.account-delete-button:hover:not(:disabled) {
+  background-color: var(--color-error-variant);
+}
+
+.account-delete-button:disabled {
+  background-color: var(--color-disabled-variant);
+  cursor: not-allowed;
+}
+
 /* Data input, about, and organisation browser-style page layouts. */
 .data-input-browser-window {
   grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);

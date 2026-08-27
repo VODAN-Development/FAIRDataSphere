@@ -50,6 +50,13 @@ export async function listUsersByIds(ids) {
     .map(publicUser);
 }
 
+export async function listUsers() {
+  const users = await readUsers();
+  return users
+    .map(publicUser)
+    .sort((left, right) => String(left.email).localeCompare(String(right.email)));
+}
+
 export async function createUser({ email, password, name }) {
   // Normalize email before uniqueness checks so casing cannot create duplicates.
   const normalizedEmail = String(email || "").trim().toLowerCase();
@@ -145,4 +152,23 @@ export async function updateUserPassword(userId, { currentPassword, newPassword 
   nextUsers[userIndex] = nextUser;
   await writeUsers(nextUsers);
   return publicUser(nextUser);
+}
+
+export async function deleteUser(userId) {
+  const users = await readUsers();
+  const user = users.find(candidate => candidate.id === userId);
+  if (!user) {
+    throw new Error("User not found.");
+  }
+  if (user.role === "admin") {
+    const remainingAdminCount = users.filter(candidate => (
+      candidate.role === "admin" && candidate.id !== userId
+    )).length;
+    if (remainingAdminCount === 0) {
+      throw new Error("You cannot delete the last admin account.");
+    }
+  }
+
+  await writeUsers(users.filter(candidate => candidate.id !== userId));
+  return publicUser(user);
 }

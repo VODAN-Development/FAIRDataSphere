@@ -269,6 +269,7 @@ export default `#graphql
   type Query {
     # Authentication and organisation context.
     me: User
+    users: [User!]!
     organisations: [Organisation!]!
     myOrganisations: [Organisation!]!
 
@@ -300,6 +301,7 @@ export default `#graphql
     signOut: Boolean!
     updateMyAccount(email: String!, name: String): User!
     updateMyPassword(currentPassword: String!, newPassword: String!): Boolean!
+    deleteUser(id: ID!): User!
 
     # Organisation lifecycle and membership.
     createOrganisation(name: String!, description: String, joinRequiresPassword: Boolean, joinPassword: String): Organisation!

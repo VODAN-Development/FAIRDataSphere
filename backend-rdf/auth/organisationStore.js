@@ -657,6 +657,34 @@ export async function leaveOrganisation(actor, organisationId) {
   return true;
 }
 
+export async function removeUserFromOrganisations(userId) {
+  const organisations = await readOrganisations();
+  let changed = false;
+  const nextOrganisations = organisations.map(organisation => {
+    const membership = membershipFor(organisation, userId);
+    if (!membership) return organisation;
+    if (membership.role === "owner") {
+      const remainingOwnerCount = organisation.members.filter(member => (
+        member.role === "owner" && member.userId !== userId
+      )).length;
+      if (remainingOwnerCount === 0) {
+        throw new Error(`Cannot delete this user because they are the only owner of ${organisation.name}.`);
+      }
+    }
+
+    changed = true;
+    return {
+      ...organisation,
+      updatedAt: new Date().toISOString(),
+      members: organisation.members.filter(member => member.userId !== userId),
+    };
+  });
+
+  if (changed) {
+    await writeOrganisations(nextOrganisations);
+  }
+}
+
 export async function updateOrganisation(actor, organisationId, { name, description, joinRequiresPassword, joinPassword }) {
   const trimmedName = String(name || "").trim();
   if (!trimmedName) {
