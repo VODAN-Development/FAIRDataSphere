@@ -279,7 +279,8 @@ export default `#graphql
 
   type Mutation {
     # Account lifecycle.
-    signUp(email: String!, password: String!, name: String): AuthPayload!
+    requestSignUpCode(email: String!, password: String!, name: String, captchaToken: String!): Boolean!
+    signUp(email: String!, password: String!, name: String, verificationCode: String!): AuthPayload!
     signIn(email: String!, password: String!): AuthPayload!
     signOut: Boolean!
     updateMyAccount(email: String!, name: String): User!

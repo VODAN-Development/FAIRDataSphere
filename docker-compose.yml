@@ -64,6 +64,7 @@ services:
       context: ./sitrep-app
       args:
         VITE_GRAPHQL_URL: ${VITE_GRAPHQL_URL}
+        VITE_TURNSTILE_SITE_KEY: ${VITE_TURNSTILE_SITE_KEY}
     restart: unless-stopped
     expose:
       - "80"

@@ -28,6 +28,7 @@ import {
   updateOrganisationMemberRole,
 } from "../auth/organisationStore.js";
 import { requireAdmin, requireAuth } from "../auth/requireAuth.js";
+import { consumeSignUpCode, requestSignUpCode } from "../auth/signUpVerificationStore.js";
 import { createSessionToken, sessionCookieName, sessionCookieOptions } from "../auth/tokens.js";
 import {
   PREFIXES,
@@ -2188,8 +2189,17 @@ const resolvers = {
   },
 
   Mutation: {
-    signUp: async (_, { email, password, name }, context) => {
-      const user = await createUser({ email, password, name });
+    requestSignUpCode: async (_, { email, password, name, captchaToken }, context) => {
+      const forwardedFor = context.req.headers["x-forwarded-for"];
+      const remoteIp = String(Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor || context.req.ip || "")
+        .split(",")[0]
+        .trim();
+      return requestSignUpCode({ email, password, name, captchaToken, remoteIp });
+    },
+
+    signUp: async (_, { email, password, name, verificationCode }, context) => {
+      const verified = await consumeSignUpCode({ email, code: verificationCode });
+      const user = await createUser({ email: verified.email, password, name: name || verified.name });
       context.res.cookie(sessionCookieName(), createSessionToken(user), sessionCookieOptions());
       return { user };
     },
@@ -2738,7 +2748,7 @@ for (const [name, resolver] of Object.entries(resolvers.Query)) {
 // Secure mutations by default and require organisation data-write permission for
 // data-changing operations outside account and organisation membership flows.
 for (const [name, resolver] of Object.entries(resolvers.Mutation)) {
-  if (["signUp", "signIn", "signOut"].includes(name)) continue;
+  if (["requestSignUpCode", "signUp", "signIn", "signOut"].includes(name)) continue;
   resolvers.Mutation[name] = async (parent, args, context, info) => {
     const user = requireAuth(context);
     const accountMutations = new Set(["updateMyAccount", "updateMyPassword"]);

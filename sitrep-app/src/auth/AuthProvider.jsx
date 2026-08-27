@@ -27,8 +27,8 @@ const SIGN_IN = gql`
 `;
 
 const SIGN_UP = gql`
-  mutation SignUp($email: String!, $password: String!, $name: String) {
-    signUp(email: $email, password: $password, name: $name) {
+  mutation SignUp($email: String!, $password: String!, $name: String, $verificationCode: String!) {
+    signUp(email: $email, password: $password, name: $name, verificationCode: $verificationCode) {
       user {
         id
         email
@@ -36,6 +36,12 @@ const SIGN_UP = gql`
         role
       }
     }
+  }
+`;
+
+const REQUEST_SIGN_UP_CODE = gql`
+  mutation RequestSignUpCode($email: String!, $password: String!, $name: String, $captchaToken: String!) {
+    requestSignUpCode(email: $email, password: $password, name: $name, captchaToken: $captchaToken)
   }
 `;
 
@@ -54,6 +60,7 @@ export function AuthProvider({ children }) {
     errorPolicy: 'ignore',
   });
   const [signInMutation] = useMutation(SIGN_IN);
+  const [requestSignUpCodeMutation] = useMutation(REQUEST_SIGN_UP_CODE);
   const [signUpMutation] = useMutation(SIGN_UP);
   const [signOutMutation] = useMutation(SIGN_OUT);
 
@@ -64,8 +71,13 @@ export function AuthProvider({ children }) {
     return result.data.signIn.user;
   }, [refetch, signInMutation]);
 
-  const signUp = useCallback(async ({ email, password, name }) => {
-    const result = await signUpMutation({ variables: { email, password, name } });
+  const requestSignUpCode = useCallback(async ({ email, password, name, captchaToken }) => {
+    const result = await requestSignUpCodeMutation({ variables: { email, password, name, captchaToken } });
+    return result.data.requestSignUpCode;
+  }, [requestSignUpCodeMutation]);
+
+  const signUp = useCallback(async ({ email, password, name, verificationCode }) => {
+    const result = await signUpMutation({ variables: { email, password, name, verificationCode } });
     await refetch();
     return result.data.signUp.user;
   }, [refetch, signUpMutation]);
@@ -83,10 +95,11 @@ export function AuthProvider({ children }) {
     // auth actions actually change.
     user: data?.me || null,
     loading,
+    requestSignUpCode,
     signIn,
     signUp,
     signOut,
-  }), [data?.me, loading, signIn, signOut, signUp]);
+  }), [data?.me, loading, requestSignUpCode, signIn, signOut, signUp]);
 
   return (
     <AuthContext.Provider value={value}>

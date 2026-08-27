@@ -403,6 +403,10 @@ nav a button {
   color: var(--color-primary);
 }
 
+.turnstile-widget {
+  min-height: 65px;
+}
+
 .account-page {
   display: flex;
   flex-direction: column;
