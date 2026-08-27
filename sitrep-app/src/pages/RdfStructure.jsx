@@ -3,6 +3,7 @@ import { useMutation, useQuery, gql } from '@apollo/client';
 import OrganisationGate from '../components/OrganisationGate.jsx';
 import { useAuth } from '../auth/useAuth.js';
 import { useOrganisationContext } from '../auth/useOrganisationContext.js';
+import FloatyConfirmation, { useFloatyConfirmation } from '../components/FloatyConfirmation.jsx';
 
 const GET_RDF_STRUCTURE = gql`
   query GetRdfStructureEditor($organisationId: ID) {
@@ -3159,11 +3160,11 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
   });
   const fileInputRef = useRef(null);
   const [rawJson, setRawJson] = useState('');
-  const [message, setMessage] = useState('');
   const [editableFieldNames, setEditableFieldNames] = useState({});
   const [editableClassNames, setEditableClassNames] = useState([]);
   const [selectedEntityType, setSelectedEntityType] = useState('');
   const [activeRightPane, setActiveRightPane] = useState('fields');
+  const { notice, showNotice, confirmAction, clearNotice } = useFloatyConfirmation();
 
   const sourceJson = rawJson || data?.rdfStructure?.json || '';
   const { structure, parseError } = useMemo(() => {
@@ -3347,16 +3348,15 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
   const handleSave = async () => {
     try {
       if (!canWriteStructure) return;
-      setMessage('');
       const nextStructure = buildStructure();
       await updateStructure({ variables: { json: JSON.stringify(nextStructure, null, 2), organisationId: activeOrganisationId } });
       await refetch({ organisationId: activeOrganisationId });
       setRawJson('');
       setEditableFieldNames({});
       setEditableClassNames([]);
-      setMessage('RDF structure saved. Open pages will use the new structure after refetching.');
+      showNotice('RDF structure saved. Open pages will use the new structure after refetching.');
     } catch (err) {
-      setMessage(`Error: ${err.message}`);
+      showNotice(`Error saving RDF structure: ${err.message}`, 'error');
     }
   };
 
@@ -3365,7 +3365,6 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
     const name = window.prompt('Preset name');
     if (!name) return;
     try {
-      setMessage('');
       const nextStructure = buildStructure();
       await savePreset({
         variables: {
@@ -3375,26 +3374,27 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
           scope,
         },
       });
-      setMessage(scope === 'global' ? 'Global RDF preset saved.' : 'RDF preset saved.');
+      showNotice(scope === 'global' ? 'Global RDF preset saved.' : 'RDF preset saved.');
     } catch (err) {
-      setMessage(`Error: ${err.message}`);
+      showNotice(`Error saving RDF preset: ${err.message}`, 'error');
     }
   };
 
   const handleLoadPreset = async (preset) => {
     if (!canWriteStructure) return;
-    const confirmed = window.confirm(`Load "${preset.name}"?\n\nThis replaces the current RDF structure.`);
+    const confirmed = await confirmAction(`Load "${preset.name}"? This replaces the current RDF structure.`, {
+      confirmLabel: 'Load preset',
+    });
     if (!confirmed) return;
     try {
-      setMessage('');
       await loadPreset({ variables: { id: preset.id, organisationId: activeOrganisationId, scope: preset.scope } });
       await refetch({ organisationId: activeOrganisationId });
       setRawJson('');
       setEditableFieldNames({});
       setEditableClassNames([]);
-      setMessage('RDF preset loaded.');
+      showNotice('RDF preset loaded.');
     } catch (err) {
-      setMessage(`Error: ${err.message}`);
+      showNotice(`Error loading RDF preset: ${err.message}`, 'error');
     }
   };
 
@@ -3402,6 +3402,7 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
     if (!sourceJson) return;
     const formattedJson = JSON.stringify(JSON.parse(sourceJson), null, 2);
     downloadJsonFile('rdf-structure.json', formattedJson);
+    showNotice('Current RDF structure downloaded.');
   };
 
   const handleDownloadPreset = (preset) => {
@@ -3414,14 +3415,15 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
 
   const handleDeletePreset = async (preset) => {
     if (!preset.canDelete) return;
-    const confirmed = window.confirm(`Delete "${preset.name}"?\n\nThis cannot be undone.`);
+    const confirmed = await confirmAction(`Delete "${preset.name}"? This cannot be undone.`, {
+      confirmLabel: 'Delete preset',
+    });
     if (!confirmed) return;
     try {
-      setMessage('');
       await deletePreset({ variables: { id: preset.id, organisationId: activeOrganisationId, scope: preset.scope } });
-      setMessage(preset.scope === 'global' ? 'Global RDF preset deleted.' : 'RDF preset deleted.');
+      showNotice(preset.scope === 'global' ? 'Global RDF preset deleted.' : 'RDF preset deleted.');
     } catch (err) {
-      setMessage(`Error: ${err.message}`);
+      showNotice(`Error deleting RDF preset: ${err.message}`, 'error');
     }
   };
 
@@ -3429,24 +3431,29 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
     const importedStructure = refreshImportedClassFieldsInStructure(applyDefaultDatatypesToStructure(JSON.parse(json)));
     validateDuplicatePredicates(importedStructure);
     const formattedJson = JSON.stringify(importedStructure, null, 2);
-    const importMode = window.confirm('Import this file as a preset?\n\nChoose Cancel to replace the current RDF structure instead.')
+    const importMode = await confirmAction('Import this file as a preset? Choose Replace current to replace the current RDF structure instead.', {
+      confirmLabel: 'Import as preset',
+      cancelLabel: 'Replace current',
+    })
       ? 'preset'
       : 'current';
     if (importMode === 'preset') {
       const name = window.prompt('Preset name');
       if (!name) return;
       await savePreset({ variables: { name, json: formattedJson, organisationId: activeOrganisationId } });
-      setMessage('RDF preset imported.');
+      showNotice('RDF preset imported.');
       return;
     }
-    const confirmed = window.confirm('Replace the current RDF structure with this file?');
+    const confirmed = await confirmAction('Replace the current RDF structure with this file?', {
+      confirmLabel: 'Replace structure',
+    });
     if (!confirmed) return;
     await updateStructure({ variables: { json: formattedJson, organisationId: activeOrganisationId } });
     await refetch({ organisationId: activeOrganisationId });
     setRawJson('');
     setEditableFieldNames({});
     setEditableClassNames([]);
-    setMessage('RDF structure imported.');
+    showNotice('RDF structure imported.');
   };
 
   const handleImportFile = async (event) => {
@@ -3454,12 +3461,11 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
     event.target.value = '';
     if (!file || !canWriteStructure) return;
     try {
-      setMessage('');
       const isXlsx = file.name.toLowerCase().endsWith('.xlsx')
         || file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
       await importStructureJson(isXlsx ? await structureJsonFromXlsx(file) : await file.text());
     } catch (err) {
-      setMessage(`Error: ${err.message}`);
+      showNotice(`Error importing RDF structure: ${err.message}`, 'error');
     }
   };
 
@@ -3526,7 +3532,6 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
               Download Current Structure
             </button>
           </div>
-          {message && <div className={message.startsWith('Error') ? 'error-message' : 'success-message'}>{message}</div>}
           {parseError && <div className="error-message">JSON error: {parseError}</div>}
           {!canWriteStructure && (
             <div className="success-message">Guests can view and download RDF structures and presets.</div>
@@ -3678,6 +3683,7 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
       >
         Top
       </button>
+      <FloatyConfirmation notice={notice} onClose={clearNotice} />
     </div>
     </OrganisationGate>
   );

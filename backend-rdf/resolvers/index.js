@@ -1127,12 +1127,25 @@ function scopedSubjectDelete(subject) {
   }`;
 }
 
-function scopedReportLinkDelete(selectedItemsField, selectedItemObject) {
+function reportItemLinkDelete(itemId) {
+  const selectedItemsField = reportSelectedItemsField();
+  const selectedItemValue = selectedItemsField.targetTemplate
+    ? applyTemplate(selectedItemsField.targetTemplate, { entryNumber: itemId, id: itemId })
+    : itemId;
+  const candidateObjects = [
+    objectTerm(selectedItemValue, selectedItemsField),
+    objectTerm(itemId, selectedItemsField),
+    objectTerm(itemId, { datatype: "xsd:integer" }),
+    objectTerm(String(itemId), {}),
+  ].filter(Boolean);
+  const values = [...new Set(candidateObjects)].join(" ");
+
   return `DELETE {
-    ?report ${selectedItemsField.predicate} ${selectedItemObject} .
+    ?report ${selectedItemsField.predicate} ?deletedItemObject .
   }
   WHERE {
-    ?report ${selectedItemsField.predicate} ${selectedItemObject} .
+    VALUES ?deletedItemObject { ${values} }
+    ?report ${selectedItemsField.predicate} ?deletedItemObject .
   }`;
 }
 
@@ -2067,22 +2080,24 @@ const resolvers = {
       return withOrganisationRepository(organisationId, async () => {
       const reportFields = queryFields(RDF.report.fields, []);
       const reportIdBase = entityIdReplacePattern("report");
+      const createdAtPredicate = RDF.report.fields.createdAt.predicate;
       const sparqlQuery = `${PREFIXES}
         SELECT ?report ?id ${selectVariables(reportFields)}
         WHERE {
           {
-            SELECT ?report ?id WHERE {
+            SELECT ?report ?id ?createdAtSort WHERE {
               ?report rdf:type ${RDF.classes.report} .
               FILTER(STRSTARTS(STR(?report), "${reportIdBase}"))
               BIND(REPLACE(STR(?report), "${reportIdBase}", "") AS ?id)
               FILTER(REGEX(?id, "^[0-9]+$"))
+              OPTIONAL { ?report ${createdAtPredicate} ?createdAtSort . }
             }
-            ORDER BY DESC(?id)
+            ORDER BY DESC(?createdAtSort) DESC(xsd:integer(?id))
             ${paginationClause({ limit, offset })}
           }
           ${fieldPatterns("?report", reportFields)}
         }
-        ORDER BY DESC(?id)
+        ORDER BY DESC(?createdAtSort) DESC(xsd:integer(?id))
       `;
 
       const result = await runSparqlQuery(sparqlQuery);
@@ -2345,14 +2360,9 @@ const resolvers = {
     deleteReportItem: async (_, { id, organisationId }, context) => {
       await requireOrganisationWrite(context, organisationId);
       return withOrganisationRepository(organisationId, async () => {
-      const selectedItemsField = reportSelectedItemsField();
-      const selectedItemValue = selectedItemsField.targetTemplate
-        ? applyTemplate(selectedItemsField.targetTemplate, { entryNumber: id, id })
-        : id;
-      const selectedItemObject = objectTerm(selectedItemValue, selectedItemsField);
       await deleteNestedGroupTriples("reportItem", id);
       await runSparqlUpdate(`${PREFIXES}
-        ${scopedReportLinkDelete(selectedItemsField, selectedItemObject)};
+        ${reportItemLinkDelete(id)};
         ${scopedSubjectDelete(entityUri("reportItem", id))}
       `);
       return true;

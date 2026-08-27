@@ -5,6 +5,7 @@ import { emptyValueFor, fieldInputsPayload, fieldValidationFromError } from '../
 import OrganisationGate from '../components/OrganisationGate.jsx';
 import { useOrganisationContext } from '../auth/useOrganisationContext.js';
 import { notifyReportsUpdated, titleForEntity } from '../utils/reportDisplay.js';
+import FloatyConfirmation, { useFloatyConfirmation } from '../components/FloatyConfirmation.jsx';
 
 const GET_RDF_STRUCTURE = gql`
   fragment RdfStructureFieldLevel3 on RdfStructureField {
@@ -1047,6 +1048,7 @@ export default function DataInput() {
   const [structureImportSummary, setStructureImportSummary] = useState(null);
   const [structureDraft, setStructureDraft] = useState(null);
   const [activeDraftTabId, setActiveDraftTabId] = useState('');
+  const { notice, showNotice, clearNotice } = useFloatyConfirmation();
 
   const structure = useMemo(() => {
     if (!data?.rdfStructure?.json) return null;
@@ -1156,7 +1158,7 @@ export default function DataInput() {
         variables: { entityType: activeEntityType, fieldValues, organisationId: activeOrganisationId },
       });
       const created = result.data.createRdfEntityFromFields;
-      setMessage(`${titleForEntity(created.entityType)} created.`);
+      showNotice(`${titleForEntity(created.entityType)} created.`);
       setFormData({});
       notifyReportsUpdated();
     } catch (err) {
@@ -1166,6 +1168,7 @@ export default function DataInput() {
         return;
       }
       setError('Error: ' + err.message);
+      showNotice(`Error creating ${titleForEntity(activeEntityType).toLowerCase()}: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -1269,12 +1272,13 @@ export default function DataInput() {
       });
       await refetchRdfStructure?.();
       setStructureImportSummary(draftStructureStats);
-      setMessage(`RDF structure saved from ${structureDraft.filename}.`);
+      showNotice(`RDF structure saved from ${structureDraft.filename}.`);
       setStructureImportFile(null);
       setStructureDraft(null);
       setActiveDraftTabId('');
     } catch (err) {
       setError('Error: ' + err.message);
+      showNotice(`Error saving RDF structure: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -1661,6 +1665,7 @@ export default function DataInput() {
             </>
           )}
         </div>
+        <FloatyConfirmation notice={notice} onClose={clearNotice} />
       </main>
     </OrganisationGate>
   );

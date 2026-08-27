@@ -5,6 +5,7 @@ import { fieldInputsPayload, fieldValidationFromError, formValuesFromFields } fr
 import { displayValue, formatTimestamp, itemTitle, notifyReportsUpdated, reportTitle, titleForEntity } from '../utils/reportDisplay.js';
 import OrganisationGate from '../components/OrganisationGate.jsx';
 import { useOrganisationContext } from '../auth/useOrganisationContext.js';
+import FloatyConfirmation, { useFloatyConfirmation } from '../components/FloatyConfirmation.jsx';
 
 const GET_RDF_STRUCTURE = gql`
   query GetRdfStructureForItems($organisationId: ID) {
@@ -244,6 +245,7 @@ export default function Items() {
   const [itemPageIndex, setItemPageIndex] = useState(0);
   const [entityPageIndex, setEntityPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const { notice, showNotice, confirmAction, clearNotice } = useFloatyConfirmation();
 
   const reportItemVariables = { organisationId: activeOrganisationId, limit: pageSize, offset: itemPageIndex * pageSize };
   const reportsVariables = { organisationId: activeOrganisationId };
@@ -325,7 +327,7 @@ export default function Items() {
   useEffect(() => {
     setItemPageIndex(0);
     setEntityPageIndex(0);
-  }, [activeEntityType, activeOrganisationId]);
+  }, [selectedEntityType, activeOrganisationId]);
 
   useEffect(() => {
     setItemPageIndex(0);
@@ -344,14 +346,16 @@ export default function Items() {
   );
 
   useEffect(() => {
+    if (itemsLoading) return;
     const lastPageIndex = Math.max(0, Math.ceil(reportItemCount / pageSize) - 1);
     if (itemPageIndex > lastPageIndex) setItemPageIndex(lastPageIndex);
-  }, [itemPageIndex, pageSize, reportItemCount]);
+  }, [itemPageIndex, itemsLoading, pageSize, reportItemCount]);
 
   useEffect(() => {
+    if (entitiesLoading) return;
     const lastPageIndex = Math.max(0, Math.ceil(entityCount / pageSize) - 1);
     if (entityPageIndex > lastPageIndex) setEntityPageIndex(lastPageIndex);
-  }, [entityCount, entityPageIndex, pageSize]);
+  }, [entitiesLoading, entityCount, entityPageIndex, pageSize]);
 
   const startEditing = (key, fields) => {
     setActionError('');
@@ -427,11 +431,18 @@ export default function Items() {
   };
 
   const handleDeleteReportItem = async (id) => {
+    const confirmed = await confirmAction(`Delete report item #${id}? This cannot be undone.`, {
+      confirmLabel: 'Delete item',
+    });
+    if (!confirmed) return;
+
     try {
       setActionError('');
       await deleteReportItem({ variables: { id, organisationId: activeOrganisationId } });
+      showNotice(`Report item #${id} deleted.`);
     } catch (err) {
       setActionError(err.message);
+      showNotice(`Error deleting report item: ${err.message}`, 'error');
     }
   };
 
@@ -738,6 +749,7 @@ export default function Items() {
           )}
         </main>
       </div>
+      <FloatyConfirmation notice={notice} onClose={clearNotice} />
     </div>
     </OrganisationGate>
   );

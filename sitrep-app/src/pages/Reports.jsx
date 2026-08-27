@@ -5,6 +5,7 @@ import { emptyValueFor, fieldInputsPayload, fieldValidationFromError, formValues
 import { displayValue, formatTimestamp, itemTitle, notifyReportsUpdated, reportTitle } from '../utils/reportDisplay.js';
 import OrganisationGate from '../components/OrganisationGate.jsx';
 import { useOrganisationContext } from '../auth/useOrganisationContext.js';
+import FloatyConfirmation, { useFloatyConfirmation } from '../components/FloatyConfirmation.jsx';
 
 const GET_RDF_STRUCTURE = gql`
   fragment ReportRdfStructureFieldLevel3 on RdfStructureField {
@@ -614,6 +615,7 @@ export default function Reports() {
   const [selectedAutomationId, setSelectedAutomationId] = useState('');
   const [automationDraft, setAutomationDraft] = useState(null);
   const [hasMoreReports, setHasMoreReports] = useState(true);
+  const { notice, showNotice, confirmAction, clearNotice } = useFloatyConfirmation();
 
   const queryVariables = { organisationId: activeOrganisationId, limit: PAGE_SIZE, offset: 0 };
   const allReportItemsVariables = { organisationId: activeOrganisationId };
@@ -1018,8 +1020,10 @@ export default function Reports() {
       setSelectedCompiledReportId(result.data.createCompiledReport.id);
       setCompiledEditDraft(null);
       await refetchCompiledReports();
+      showNotice('Report compiled.');
     } catch (err) {
       setError('Error compiling report: ' + err.message);
+      showNotice(`Error compiling report: ${err.message}`, 'error');
     }
   };
 
@@ -1107,6 +1111,7 @@ export default function Reports() {
       setIsCreatingReport(false);
       setSelectedReportId(result.data.createReportFromFields.id);
       notifyReportsUpdated();
+      showNotice('Report created.');
     } catch (err) {
       const fieldValidation = fieldValidationFromError(err);
       if (fieldValidation) {
@@ -1114,20 +1119,24 @@ export default function Reports() {
         return;
       }
       setError('Error creating report: ' + err.message);
+      showNotice(`Error creating report: ${err.message}`, 'error');
     }
   };
 
   const handleDeleteReport = async (reportId) => {
-    if (!window.confirm('Are you sure you want to delete this report?')) {
-      return;
-    }
+    const confirmed = await confirmAction('Delete this report? This cannot be undone.', {
+      confirmLabel: 'Delete report',
+    });
+    if (!confirmed) return;
 
     try {
       await deleteReport({ variables: { id: reportId, organisationId: activeOrganisationId } });
       setSelectedReportId('');
       notifyReportsUpdated();
+      showNotice('Report deleted.');
     } catch (err) {
       setError('Error deleting report: ' + err.message);
+      showNotice(`Error deleting report: ${err.message}`, 'error');
     }
   };
 
@@ -1915,6 +1924,7 @@ export default function Reports() {
         </main>
       </div>
     </div>
+    <FloatyConfirmation notice={notice} onClose={clearNotice} />
     </OrganisationGate>
   );
 }

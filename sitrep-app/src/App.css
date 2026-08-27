@@ -1939,6 +1939,66 @@ nav a button {
   text-align: center;
 }
 
+.floaty-confirmation {
+  position: fixed;
+  left: 50%;
+  bottom: 1.25rem;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  width: min(calc(100vw - 2rem), 42rem);
+  min-height: 3.25rem;
+  padding: 0.75rem 0.85rem 0.75rem 1rem;
+  border: 1px solid var(--color-border-muted);
+  border-radius: 8px;
+  background-color: var(--color-surface-raised);
+  box-shadow: 0 12px 28px var(--color-shadow-neutral);
+  color: var(--color-on-surface);
+  transform: translateX(-50%);
+}
+
+.floaty-confirmation.success {
+  border-color: var(--color-border-success);
+  background-color: var(--color-success-container);
+  color: var(--color-on-success-container);
+}
+
+.floaty-confirmation.error,
+.floaty-confirmation.warning {
+  border-color: var(--color-border-danger);
+  background-color: var(--color-danger-container);
+  color: var(--color-error-strong);
+}
+
+.floaty-confirmation-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+.floaty-confirmation-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 0.5rem;
+}
+
+.floaty-confirmation-close {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-weight: 800;
+}
+
 /* RDF structure editor, schema tables, class sidebar, and suggestion inputs. */
 .rdf-editor-section {
   margin: 1rem 0;
