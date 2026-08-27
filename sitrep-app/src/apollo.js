@@ -9,6 +9,9 @@ export const client = new ApolloClient({
   }),
   cache: new InMemoryCache({
     typePolicies: {
+      OrganisationRole: {
+        keyFields: false,
+      },
       Query: {
         fields: {
           // RDF structures are organisation-scoped, so cache entries must include
