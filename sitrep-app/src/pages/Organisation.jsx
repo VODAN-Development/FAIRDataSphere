@@ -10,13 +10,8 @@ const ORGANISATION_FIELDS = gql`
     createdBy
     createdAt
     updatedAt
-    repository
     repositoryStatus
     repositoryProvisioningError
-    repositoryUsername
-    repositoryPassword
-    repositoryReadUsername
-    repositoryReadPassword
     joinRequiresPassword
     joinPassword
     currentUserRole
@@ -26,31 +21,19 @@ const ORGANISATION_FIELDS = gql`
       manageOrganisation
       manageRoles
       promoteGuests
-      viewMemberCredentials
-      viewOwnerCredentials
       viewJoinPassword
-      allegroRead
-      allegroWrite
-      allegroQueryLimit
     }
     roles {
       id
       name
       builtIn
-      repositoryUsername
-      repositoryPassword
       permissions {
         appRead
         appWrite
         manageOrganisation
         manageRoles
         promoteGuests
-        viewMemberCredentials
-        viewOwnerCredentials
         viewJoinPassword
-        allegroRead
-        allegroWrite
-        allegroQueryLimit
       }
     }
     members {
@@ -151,12 +134,7 @@ const ROLE_PERMISSION_FIELDS = [
   ['manageOrganisation', 'Manage organisation settings'],
   ['manageRoles', 'Manage roles and members'],
   ['promoteGuests', 'Promote guests to members'],
-  ['viewMemberCredentials', 'View read credentials'],
-  ['viewOwnerCredentials', 'View write credentials'],
   ['viewJoinPassword', 'View join password'],
-  ['allegroRead', 'AllegroGraph read user'],
-  ['allegroWrite', 'AllegroGraph write user'],
-  ['allegroQueryLimit', 'Limit AllegroGraph queries to 1000 results'],
 ];
 
 function permissionInput(permissions = {}) {
@@ -243,7 +221,6 @@ function RoleEditor({ role, canManageRoles, onSave, saving }) {
     setPermissions(current => ({
       ...current,
       [key]: value,
-      ...(key === 'allegroWrite' && value ? { allegroRead: true } : {}),
       ...(key === 'appWrite' && value ? { appRead: true } : {}),
     }));
   }
@@ -274,38 +251,12 @@ function RoleEditor({ role, canManageRoles, onSave, saving }) {
                 'appWrite',
                 'manageOrganisation',
                 'manageRoles',
-                'viewOwnerCredentials',
-                'allegroRead',
-                'allegroWrite',
-                'allegroQueryLimit',
               ].includes(key))}
               onChange={event => setPermission(key, event.target.checked)}
             />
             {label}
           </label>
         ))}
-      </div>
-
-      <div className="organisation-repository compact">
-        <h4>AllegroGraph role user</h4>
-        <dl>
-          <div>
-            <dt>Username</dt>
-            <dd>{role.repositoryUsername || '-'}</dd>
-          </div>
-          <div>
-            <dt>Password</dt>
-            <dd>{role.repositoryPassword || '-'}</dd>
-          </div>
-          <div>
-            <dt>Web view</dt>
-            <dd>
-              <a href="https://agraph.fairdatasphere.com" target="_blank" rel="noreferrer">
-                agraph.fairdatasphere.com
-              </a>
-            </dd>
-          </div>
-        </dl>
       </div>
 
       {canManageRoles && (
@@ -423,7 +374,7 @@ export default function Organisation() {
       setNewJoinPassword('');
       setMessage(createdOrganisation?.repositoryStatus === 'ready'
         ? 'Organisation created.'
-        : 'Organisation created. Its data repository is pending because AllegroGraph shared memory is currently full.');
+        : 'Organisation created. Its data repository is pending because repository capacity is currently full.');
     } catch (submissionError) {
       setFormError(submissionError.message);
     }
@@ -516,12 +467,7 @@ export default function Organisation() {
             manageOrganisation: false,
             manageRoles: false,
             promoteGuests: false,
-            viewMemberCredentials: false,
-            viewOwnerCredentials: false,
             viewJoinPassword: false,
-            allegroRead: false,
-            allegroWrite: false,
-            allegroQueryLimit: false,
           },
         },
       });
@@ -602,7 +548,7 @@ export default function Organisation() {
           <div className="organisation-repository-warning">
             <h4>Data repository pending</h4>
             <p>
-              {selectedOrganisation.repositoryProvisioningError || 'Organisation settings are available, but data input is disabled until the AllegroGraph repository is provisioned.'}
+              {selectedOrganisation.repositoryProvisioningError || 'Organisation settings are available, but data input is disabled until the data repository is provisioned.'}
             </p>
             {isOwner && (
               <button
@@ -718,11 +664,11 @@ export default function Organisation() {
                 >
                   <strong>{role.name}</strong>
                   <span>
-                    {role.permissions.allegroWrite
-                      ? `AllegroGraph write${role.permissions.allegroQueryLimit ? ', 1000-result cap' : ''}`
-                      : role.permissions.allegroRead
-                        ? `AllegroGraph read${role.permissions.allegroQueryLimit ? ', 1000-result cap' : ''}`
-                        : 'App only'}
+                    {role.permissions.appWrite
+                      ? 'Can edit app data'
+                      : role.permissions.appRead
+                        ? 'Can view app data'
+                        : 'No app access'}
                   </span>
                 </button>
               ))}

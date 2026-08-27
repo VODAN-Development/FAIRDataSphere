@@ -23,11 +23,12 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, "../data");
 const ORGANISATIONS_FILE = path.join(DATA_DIR, "organisations.json");
+const REPOSITORY_CREDENTIALS_FILE = path.join(DATA_DIR, "repository-credentials.json");
 const RDF_STRUCTURES_DIR = path.join(DATA_DIR, "rdf-structures");
 const RDF_STRUCTURE_FILE_NAME = "reportRdfStructure.json";
 const RDF_PRESETS_FILE_NAME = "presets.json";
 const UNSCOPED_RDF_STRUCTURE_KEY = "no-organisation";
-const REPOSITORY_PENDING_MESSAGE = "The organisation was created, but its AllegroGraph repository could not be created because shared memory is currently full. Data input will be unavailable until the repository is provisioned.";
+const REPOSITORY_PENDING_MESSAGE = "The organisation was created, but its data repository could not be created because repository capacity is currently full. Data input will be unavailable until the repository is provisioned.";
 let credentialUpgradeQueue = Promise.resolve();
 
 // Higher weights represent broader organisation permissions.
@@ -44,12 +45,7 @@ const ROLE_PERMISSION_KEYS = [
   "manageOrganisation",
   "manageRoles",
   "promoteGuests",
-  "viewMemberCredentials",
-  "viewOwnerCredentials",
   "viewJoinPassword",
-  "allegroRead",
-  "allegroWrite",
-  "allegroQueryLimit",
 ];
 
 const DEFAULT_ROLE_PERMISSIONS = {
@@ -59,12 +55,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     manageOrganisation: true,
     manageRoles: true,
     promoteGuests: true,
-    viewMemberCredentials: true,
-    viewOwnerCredentials: true,
     viewJoinPassword: true,
-    allegroRead: true,
-    allegroWrite: true,
-    allegroQueryLimit: false,
   },
   member: {
     appRead: true,
@@ -72,12 +63,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     manageOrganisation: false,
     manageRoles: false,
     promoteGuests: true,
-    viewMemberCredentials: true,
-    viewOwnerCredentials: false,
     viewJoinPassword: false,
-    allegroRead: true,
-    allegroWrite: false,
-    allegroQueryLimit: false,
   },
   guest: {
     appRead: true,
@@ -85,12 +71,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     manageOrganisation: false,
     manageRoles: false,
     promoteGuests: false,
-    viewMemberCredentials: false,
-    viewOwnerCredentials: false,
     viewJoinPassword: false,
-    allegroRead: false,
-    allegroWrite: false,
-    allegroQueryLimit: false,
   },
 };
 
@@ -109,24 +90,13 @@ function generatedPassword() {
   return randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "").slice(0, 16);
 }
 
-// Each organisation receives dedicated write credentials plus separate read-only
-// credentials for members who can view data but should not manage the repository.
+// Each organisation receives one backend-only write credential for app data access.
 function repositoryCredentials(organisationId, name) {
   const shortId = organisationId.split("-")[0];
   return {
     repository: `sitrep-${slug(name)}-${shortId}`,
     username: `sitrep_${shortId}`,
     password: generatedPassword(),
-  };
-}
-
-function repositoryReadCredentials(organisationId, repository) {
-  const shortId = organisationId.split("-")[0];
-  return {
-    repository,
-    username: `sitrep_${shortId}_read`,
-    password: generatedPassword(),
-    write: false,
   };
 }
 
@@ -154,15 +124,6 @@ function sparqlLiteral(value) {
   return JSON.stringify(String(value));
 }
 
-function repositoryRoleCredentials(organisationId, repository, roleId) {
-  const shortId = organisationId.split("-")[0];
-  return {
-    repository,
-    username: `sitrep_${shortId}_${slug(roleId).replace(/-/g, "_")}`,
-    password: generatedPassword(),
-  };
-}
-
 function isRepositoryMemoryError(error) {
   return /shared memory|\/dev\/shm|insufficient shared memory|Could not create shared memory segment/i.test(error?.message || "");
 }
@@ -180,19 +141,16 @@ function repositoryPendingError(error) {
 
 async function provisionRepositoryCredentials(organisation) {
   const credentials = repositoryCredentials(organisation.id, organisation.name);
-  const readCredentials = repositoryReadCredentials(organisation.id, credentials.repository);
   await createRepository(credentials.repository);
-  await createRepositoryUser(credentials);
-  await createRepositoryUser(readCredentials);
-  return {
+  await createRepositoryUser({ ...credentials, write: true });
+  await saveRepositoryCredentials(organisation.id, credentials);
+  return withRepositoryCredentials({
     ...organisation,
     repository: credentials.repository,
     repositoryUsername: credentials.username,
     repositoryPassword: credentials.password,
-    repositoryReadUsername: readCredentials.username,
-    repositoryReadPassword: readCredentials.password,
     repositoryProvisioningError: null,
-  };
+  }, credentials);
 }
 
 // Older deployments stored organisation-scoped triples in the shared repository.
@@ -222,18 +180,111 @@ async function deleteLegacyOrganisationData(organisationId) {
   });
 }
 
+async function readRepositoryCredentialStore() {
+  try {
+    const json = await readFile(REPOSITORY_CREDENTIALS_FILE, "utf8");
+    const store = JSON.parse(json);
+    return Object.fromEntries(Object.entries(store).map(([organisationId, credentials]) => [
+      organisationId,
+      credentials
+        ? {
+          ...credentials,
+          password: decryptRepositoryPassword(credentials.password),
+        }
+        : credentials,
+    ]));
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+    throw error;
+  }
+}
+
+async function writeRepositoryCredentialStore(store) {
+  await mkdir(DATA_DIR, { recursive: true });
+  const serializedStore = Object.fromEntries(Object.entries(store).map(([organisationId, credentials]) => [
+    organisationId,
+    credentials
+      ? {
+        ...credentials,
+        password: encryptRepositoryPassword(credentials.password),
+      }
+      : credentials,
+  ]));
+  await writeFile(REPOSITORY_CREDENTIALS_FILE, `${JSON.stringify(serializedStore, null, 2)}\n`, "utf8");
+}
+
+async function saveRepositoryCredentials(organisationId, credentials) {
+  const store = await readRepositoryCredentialStore();
+  await writeRepositoryCredentialStore({
+    ...store,
+    [organisationId]: credentials,
+  });
+}
+
+async function deleteStoredRepositoryCredentials(organisationId) {
+  const store = await readRepositoryCredentialStore();
+  if (!store[organisationId]) return;
+  const nextStore = { ...store };
+  delete nextStore[organisationId];
+  await writeRepositoryCredentialStore(nextStore);
+}
+
+function repositoryCredentialsFromOrganisation(organisation) {
+  if (!organisation.repository || !organisation.repositoryUsername || !organisation.repositoryPassword) return null;
+  return {
+    repository: organisation.repository,
+    username: organisation.repositoryUsername,
+    password: decryptRepositoryPassword(organisation.repositoryPassword) || organisation.repositoryPassword,
+  };
+}
+
+function withRepositoryCredentials(organisation, credentials) {
+  if (!credentials) return organisation;
+  return {
+    ...organisation,
+    repository: credentials.repository || organisation.repository,
+    repositoryUsername: credentials.username || null,
+    repositoryPassword: credentials.password || null,
+  };
+}
+
 // Reads also perform a small data migration: old inline RDF structures are moved
 // into their own files so organisation metadata stays small and credential-only.
 async function readOrganisations() {
   try {
     const json = await readFile(ORGANISATIONS_FILE, "utf8");
     const organisations = JSON.parse(json);
-    if (organisations.some(organisation => organisation.rdfStructureJson)) {
-      await Promise.all(organisations.map(migrateInlineRdfStructure));
-      await writeOrganisations(organisations);
-      return organisations.map(withoutInlineRdfStructure);
+    const credentialStore = await readRepositoryCredentialStore();
+    const missingCredentialEntries = Object.fromEntries(
+      organisations
+        .map(organisation => [organisation.id, repositoryCredentialsFromOrganisation(organisation)])
+        .filter(([, credentials]) => credentials)
+        .filter(([organisationId]) => !credentialStore[organisationId])
+    );
+    if (Object.keys(missingCredentialEntries).length > 0) {
+      await writeRepositoryCredentialStore({ ...credentialStore, ...missingCredentialEntries });
     }
-    return organisations;
+    const nextCredentialStore = Object.keys(missingCredentialEntries).length > 0
+      ? { ...credentialStore, ...missingCredentialEntries }
+      : credentialStore;
+    const hydratedOrganisations = organisations.map(organisation => (
+      withRepositoryCredentials(organisation, nextCredentialStore[organisation.id])
+    ));
+    if (organisations.some(organisation => organisation.rdfStructureJson)) {
+      await Promise.all(hydratedOrganisations.map(migrateInlineRdfStructure));
+      await writeOrganisations(hydratedOrganisations);
+      return hydratedOrganisations.map(withoutInlineRdfStructure);
+    }
+    if (organisations.some(organisation => (
+      organisation.repositoryUsername
+      || organisation.repositoryPassword
+      || organisation.repositoryReadUsername
+      || organisation.repositoryReadPassword
+      || (organisation.roles || []).some(role => role.repositoryUsername || role.repositoryPassword)
+    ))) {
+      await writeOrganisations(hydratedOrganisations);
+    }
+    return hydratedOrganisations;
   } catch (error) {
     if (error.code === "ENOENT") return [];
     throw error;
@@ -254,15 +305,17 @@ function withoutInlineRdfStructure(organisation) {
 
 function serializedOrganisation(organisation) {
   const metadata = withoutInlineRdfStructure(organisation);
+  const {
+    repositoryUsername,
+    repositoryPassword,
+    repositoryReadUsername,
+    repositoryReadPassword,
+    ...publicMetadata
+  } = metadata;
   return {
-    ...metadata,
-    repositoryPassword: encryptRepositoryPassword(metadata.repositoryPassword),
-    repositoryReadPassword: encryptRepositoryPassword(metadata.repositoryReadPassword),
-    joinPassword: encryptJoinPassword(metadata.joinPassword),
-    roles: normalizeOrganisationRoles(metadata).map(role => ({
-      ...role,
-      repositoryPassword: encryptRepositoryPassword(role.repositoryPassword),
-    })),
+    ...publicMetadata,
+    joinPassword: encryptJoinPassword(publicMetadata.joinPassword),
+    roles: normalizeOrganisationRoles(publicMetadata),
   };
 }
 
@@ -295,23 +348,11 @@ function normalizeRolePermissions(roleId, permissions = {}) {
 }
 
 function builtInRole(organisation, roleId) {
-  const repositoryUsername = roleId === "owner"
-    ? organisation.repositoryUsername || null
-    : roleId === "member"
-      ? organisation.repositoryReadUsername || null
-      : null;
-  const repositoryPassword = roleId === "owner"
-    ? organisation.repositoryPassword || null
-    : roleId === "member"
-      ? organisation.repositoryReadPassword || null
-      : null;
   return {
     id: roleId,
     name: roleLabelFromId(roleId),
     builtIn: true,
     permissions: normalizeRolePermissions(roleId),
-    repositoryUsername,
-    repositoryPassword,
   };
 }
 
@@ -326,18 +367,13 @@ function normalizeOrganisationRoles(organisation) {
   for (const role of storedRoles) {
     const roleId = normalizedRoleId(role.id || role.name);
     if (!roleId) continue;
-    const existing = rolesById.get(roleId);
-    const hasRepositoryUsername = Object.hasOwn(role, "repositoryUsername");
-    const hasRepositoryPassword = Object.hasOwn(role, "repositoryPassword");
     rolesById.set(roleId, {
       id: roleId,
       name: BUILT_IN_ROLE_IDS.includes(roleId)
         ? roleLabelFromId(roleId)
-        : String(role.name || existing?.name || roleLabelFromId(roleId)).trim(),
+        : String(role.name || rolesById.get(roleId)?.name || roleLabelFromId(roleId)).trim(),
       builtIn: BUILT_IN_ROLE_IDS.includes(roleId),
       permissions: normalizeRolePermissions(roleId, role.permissions),
-      repositoryUsername: hasRepositoryUsername ? role.repositoryUsername : existing?.repositoryUsername || null,
-      repositoryPassword: hasRepositoryPassword ? role.repositoryPassword : existing?.repositoryPassword || null,
     });
   }
 
@@ -432,7 +468,7 @@ function requireOwner(organisation, actor) {
 }
 
 // Convert internal organisation records into the permission-filtered GraphQL
-// shape, including decrypted credentials only for roles allowed to see them.
+// shape. AllegroGraph repository credentials stay backend-only.
 async function organisationPayload(organisation, currentActor) {
   const currentUserId = actorId(currentActor);
   const users = await listUsersByIds(organisation.members.map(member => member.userId));
@@ -442,12 +478,7 @@ async function organisationPayload(organisation, currentActor) {
   const currentPermissions = currentMembership
     ? roleDefinitionFor(organisation, currentMembership.role)?.permissions || {}
     : {};
-  const canViewOwnerRepositoryCredentials = isAdmin(currentActor)
-    || !!currentPermissions.viewOwnerCredentials;
-  const canViewMemberRepositoryCredentials = canViewOwnerRepositoryCredentials
-    || !!currentPermissions.viewMemberCredentials;
   const canViewJoinPassword = isAdmin(currentActor) || !!currentPermissions.viewJoinPassword;
-  const canViewRoleCredentials = isAdmin(currentActor) || canManageRoles(organisation, currentActor);
   return {
     id: organisation.id,
     name: organisation.name,
@@ -455,13 +486,8 @@ async function organisationPayload(organisation, currentActor) {
     createdBy: organisation.createdBy,
     createdAt: organisation.createdAt,
     updatedAt: organisation.updatedAt,
-    repository: canViewMemberRepositoryCredentials ? organisation.repository || null : null,
     repositoryStatus: repositoryIsReady(organisation) ? "ready" : "pending",
     repositoryProvisioningError: repositoryIsReady(organisation) ? null : organisation.repositoryProvisioningError || REPOSITORY_PENDING_MESSAGE,
-    repositoryUsername: canViewOwnerRepositoryCredentials ? organisation.repositoryUsername || null : null,
-    repositoryPassword: canViewOwnerRepositoryCredentials ? decryptRepositoryPassword(organisation.repositoryPassword) || null : null,
-    repositoryReadUsername: canViewMemberRepositoryCredentials ? organisation.repositoryReadUsername || null : null,
-    repositoryReadPassword: canViewMemberRepositoryCredentials ? decryptRepositoryPassword(organisation.repositoryReadPassword) || null : null,
     joinRequiresPassword: joinPasswordIsConfigured(organisation),
     joinPassword: canViewJoinPassword ? decryptJoinPassword(organisation.joinPassword) || null : null,
     currentUserRole: currentMembership?.role || null,
@@ -471,8 +497,6 @@ async function organisationPayload(organisation, currentActor) {
       name: role.name,
       builtIn: !!role.builtIn,
       permissions: role.permissions,
-      repositoryUsername: canViewRoleCredentials ? role.repositoryUsername || null : null,
-      repositoryPassword: canViewRoleCredentials ? decryptRepositoryPassword(role.repositoryPassword) || null : null,
     })),
     members: organisation.members.map(member => ({
       user: usersById.get(member.userId) || {
@@ -523,8 +547,6 @@ export async function createOrganisation(userId, { name, description, joinRequir
     repository: null,
     repositoryUsername: null,
     repositoryPassword: null,
-    repositoryReadUsername: null,
-    repositoryReadPassword: null,
     repositoryProvisioningError: null,
     ...requestedJoinPassword,
     createdBy: userId,
@@ -571,9 +593,6 @@ export async function provisionOrganisationRepository(actor, organisationId) {
       updatedAt: new Date().toISOString(),
     };
     provisionedOrganisation.roles = normalizeOrganisationRoles(provisionedOrganisation);
-    for (const role of provisionedOrganisation.roles) {
-      provisionedOrganisation = await ensureRoleRepositoryUser(provisionedOrganisation, role.id);
-    }
     const nextOrganisations = [...organisations];
     nextOrganisations[organisationIndex] = provisionedOrganisation;
     await writeOrganisations(nextOrganisations);
@@ -776,7 +795,6 @@ export async function updateOrganisationMemberRole(actor, organisationId, target
   };
   const nextOrganisations = [...organisations];
   nextOrganisations[organisationIndex] = nextOrganisation;
-  await ensureRoleRepositoryUser(nextOrganisation, role);
   await writeOrganisations(nextOrganisations);
   return organisationPayload(nextOrganisation, actor);
 }
@@ -806,8 +824,6 @@ export async function upsertOrganisationRole(actor, organisationId, input) {
       : String(input.name || existingRole?.name || roleLabelFromId(id)).trim(),
     builtIn: BUILT_IN_ROLE_IDS.includes(id),
     permissions: normalizeRolePermissions(id, input.permissions || existingRole?.permissions || {}),
-    repositoryUsername: existingRole?.repositoryUsername || null,
-    repositoryPassword: existingRole?.repositoryPassword || null,
   };
   if (!role.name) {
     throw new Error("Role name is required.");
@@ -819,10 +835,6 @@ export async function upsertOrganisationRole(actor, organisationId, input) {
       appWrite: id === "owner" ? true : role.permissions.appWrite,
       manageOrganisation: id === "owner" ? true : role.permissions.manageOrganisation,
       manageRoles: id === "owner" ? true : role.permissions.manageRoles,
-      viewOwnerCredentials: id === "owner" ? true : role.permissions.viewOwnerCredentials,
-      allegroRead: id === "owner" ? true : role.permissions.allegroRead,
-      allegroWrite: id === "owner" ? true : role.permissions.allegroWrite,
-      allegroQueryLimit: id === "owner" ? false : role.permissions.allegroQueryLimit,
     };
   }
 
@@ -833,11 +845,10 @@ export async function upsertOrganisationRole(actor, organisationId, input) {
     roles: nextRoles,
     updatedAt: new Date().toISOString(),
   };
-  const syncedOrganisation = await ensureRoleRepositoryUser(nextOrganisation, id);
   const nextOrganisations = [...organisations];
-  nextOrganisations[organisationIndex] = syncedOrganisation;
+  nextOrganisations[organisationIndex] = nextOrganisation;
   await writeOrganisations(nextOrganisations);
-  return organisationPayload(syncedOrganisation, actor);
+  return organisationPayload(nextOrganisation, actor);
 }
 
 export async function deleteOrganisation(actor, organisationId) {
@@ -871,11 +882,12 @@ export async function deleteOrganisation(actor, organisationId) {
   if (organisation.repositoryReadUsername) {
     await deleteRepositoryUser(organisation.repositoryReadUsername);
   }
-  for (const role of normalizeOrganisationRoles(organisation)) {
+  for (const role of organisation.roles || []) {
     if (!BUILT_IN_ROLE_IDS.includes(role.id) && role.repositoryUsername) {
       await deleteRepositoryUser(role.repositoryUsername);
     }
   }
+  await deleteStoredRepositoryCredentials(organisation.id);
   await rm(path.dirname(rdfStructureFilePath(organisationId)), { recursive: true, force: true });
 
   const nextOrganisations = organisations.filter(organisation => organisation.id !== organisationId);
@@ -985,21 +997,12 @@ async function ensureOrganisationCredentialSets(organisations, organisationIndex
 
   if (!organisation.repositoryUsername || !organisation.repositoryPassword) {
     const credentials = repositoryCredentials(organisation.id, organisation.name);
-    await createRepositoryUser({ ...credentials, repository: organisation.repository });
+    await createRepositoryUser({ ...credentials, repository: organisation.repository, write: true });
+    await saveRepositoryCredentials(organisation.id, credentials);
     nextOrganisation = {
       ...nextOrganisation,
       repositoryUsername: credentials.username,
       repositoryPassword: credentials.password,
-    };
-  }
-
-  if (!nextOrganisation.repositoryReadUsername || !nextOrganisation.repositoryReadPassword) {
-    const readCredentials = repositoryReadCredentials(nextOrganisation.id, nextOrganisation.repository);
-    await createRepositoryUser(readCredentials);
-    nextOrganisation = {
-      ...nextOrganisation,
-      repositoryReadUsername: readCredentials.username,
-      repositoryReadPassword: readCredentials.password,
     };
   }
 
@@ -1018,86 +1021,6 @@ async function ensureOrganisationCredentialSets(organisations, organisationIndex
   }
 
   return nextOrganisation;
-}
-
-async function ensureRoleRepositoryUser(organisation, roleId) {
-  const roles = normalizeOrganisationRoles(organisation);
-  const roleIndex = roles.findIndex(role => role.id === roleId);
-  if (roleIndex === -1) return organisation;
-  if (!organisation.repository) return { ...organisation, roles };
-  const role = roles[roleIndex];
-  if (role.id === "owner" || role.id === "member") {
-    const username = role.id === "owner" ? organisation.repositoryUsername : organisation.repositoryReadUsername;
-    const password = role.id === "owner" ? organisation.repositoryPassword : organisation.repositoryReadPassword;
-    const needsRepositoryAccess = !!role.permissions.allegroRead || !!role.permissions.allegroWrite;
-    if (username && password && needsRepositoryAccess) {
-      await createRepositoryUser({
-        repository: organisation.repository,
-        username,
-        password: decryptRepositoryPassword(password) || password,
-        write: !!role.permissions.allegroWrite,
-        queryResultsLimit: !!role.permissions.allegroQueryLimit,
-      });
-    } else if (username && role.id !== "owner") {
-      await deleteRepositoryUser(username);
-    }
-    const nextRoles = roles.map(candidate => {
-      if (candidate.id === "owner") {
-        return {
-          ...candidate,
-          repositoryUsername: organisation.repositoryUsername || candidate.repositoryUsername || null,
-          repositoryPassword: organisation.repositoryPassword || candidate.repositoryPassword || null,
-        };
-      }
-      if (candidate.id === "member") {
-        return {
-          ...candidate,
-          repositoryUsername: needsRepositoryAccess
-            ? organisation.repositoryReadUsername || candidate.repositoryUsername || null
-            : null,
-          repositoryPassword: needsRepositoryAccess
-            ? organisation.repositoryReadPassword || candidate.repositoryPassword || null
-            : null,
-        };
-      }
-      return candidate;
-    });
-    return { ...organisation, roles: nextRoles };
-  }
-
-  const needsRepositoryAccess = !!role.permissions.allegroRead || !!role.permissions.allegroWrite;
-  let nextRole = role;
-  if (needsRepositoryAccess) {
-    const credentials = role.repositoryUsername && role.repositoryPassword
-      ? {
-        repository: organisation.repository,
-        username: role.repositoryUsername,
-        password: decryptRepositoryPassword(role.repositoryPassword) || role.repositoryPassword,
-      }
-      : repositoryRoleCredentials(organisation.id, organisation.repository, role.id);
-    await createRepositoryUser({
-      ...credentials,
-      write: !!role.permissions.allegroWrite,
-      queryResultsLimit: !!role.permissions.allegroQueryLimit,
-    });
-    nextRole = {
-      ...role,
-      repositoryUsername: credentials.username,
-      repositoryPassword: credentials.password,
-    };
-  } else if (role.repositoryUsername) {
-    await deleteRepositoryUser(role.repositoryUsername);
-    nextRole = {
-      ...role,
-      repositoryUsername: null,
-      repositoryPassword: null,
-    };
-  }
-
-  if (nextRole === role) return { ...organisation, roles };
-  const nextRoles = [...roles];
-  nextRoles[roleIndex] = nextRole;
-  return { ...organisation, roles: nextRoles };
 }
 
 export async function organisationRdfStructureJson(organisationId) {

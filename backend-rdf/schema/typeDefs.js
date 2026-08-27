@@ -26,12 +26,7 @@ export default `#graphql
     manageOrganisation: Boolean!
     manageRoles: Boolean!
     promoteGuests: Boolean!
-    viewMemberCredentials: Boolean!
-    viewOwnerCredentials: Boolean!
     viewJoinPassword: Boolean!
-    allegroRead: Boolean!
-    allegroWrite: Boolean!
-    allegroQueryLimit: Boolean!
   }
 
   type OrganisationRole {
@@ -39,8 +34,6 @@ export default `#graphql
     name: String!
     builtIn: Boolean!
     permissions: OrganisationRolePermissions!
-    repositoryUsername: String
-    repositoryPassword: String
   }
 
   type Organisation {
@@ -50,13 +43,8 @@ export default `#graphql
     createdBy: ID!
     createdAt: String!
     updatedAt: String!
-    repository: String
     repositoryStatus: String!
     repositoryProvisioningError: String
-    repositoryUsername: String
-    repositoryPassword: String
-    repositoryReadUsername: String
-    repositoryReadPassword: String
     joinRequiresPassword: Boolean!
     joinPassword: String
     currentUserRole: String
@@ -117,12 +105,7 @@ export default `#graphql
     manageOrganisation: Boolean
     manageRoles: Boolean
     promoteGuests: Boolean
-    viewMemberCredentials: Boolean
-    viewOwnerCredentials: Boolean
     viewJoinPassword: Boolean
-    allegroRead: Boolean
-    allegroWrite: Boolean
-    allegroQueryLimit: Boolean
   }
 
   # Dynamic field values are returned as name/value pairs with the metadata the
