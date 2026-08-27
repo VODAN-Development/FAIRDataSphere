@@ -1747,7 +1747,11 @@ export default function Reports() {
                               </button>
                             )}
                           </div>
-                          <div className="report-meta-inline">Linked to this report, but item details were not found.</div>
+                          <div className="report-meta-inline">
+                            {itemsLoading
+                              ? 'Loading item details...'
+                              : 'Linked to this report, but item details were not found.'}
+                          </div>
                         </div>
                       );
                     })
