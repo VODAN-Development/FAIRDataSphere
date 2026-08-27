@@ -10,5 +10,8 @@
 
 # AllegroGraph gets its own domain for administrative access when exposed.
 {$AGRAPH_DOMAIN} {
-    reverse_proxy allegrograph:10035
+    reverse_proxy allegrograph:10035 {
+        header_up X-Forwarded-Proto https
+        header_up X-Forwarded-Host {host}
+    }
 }
