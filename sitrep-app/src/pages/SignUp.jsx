@@ -14,6 +14,7 @@ export default function SignUp() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [verificationCode, setVerificationCode] = useState('');
   const [captchaToken, setCaptchaToken] = useState('');
   const [codeSent, setCodeSent] = useState(false);
@@ -71,6 +72,10 @@ export default function SignUp() {
     event.preventDefault();
     setError('');
     setMessage('');
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
     if (!captchaToken) {
       setError('Please complete the captcha.');
       return;
@@ -94,6 +99,10 @@ export default function SignUp() {
     event.preventDefault();
     setError('');
     setMessage('');
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
     setSubmitting(true);
 
     try {
@@ -143,6 +152,19 @@ export default function SignUp() {
             autoComplete="new-password"
             value={password}
             onChange={event => setPassword(event.target.value)}
+            minLength={8}
+            disabled={codeSent}
+            required
+          />
+        </label>
+
+        <label className="form-group">
+          Confirm password
+          <input
+            type="password"
+            autoComplete="new-password"
+            value={confirmPassword}
+            onChange={event => setConfirmPassword(event.target.value)}
             minLength={8}
             disabled={codeSent}
             required
