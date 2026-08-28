@@ -18,6 +18,48 @@ services:
         condition: service_started
       backend:
         condition: service_healthy
+      keycloak:
+        condition: service_started
+
+  keycloak-postgres:
+    # Private PostgreSQL database for Keycloak identity data.
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_POSTGRES_PASSWORD}
+    volumes:
+      - keycloak_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  keycloak:
+    # Keycloak is only reachable through Caddy; no host port is published.
+    image: quay.io/keycloak/keycloak:26.7.2
+    restart: unless-stopped
+    command:
+      - start
+      - --http-enabled=true
+      - --proxy-headers=xforwarded
+      - --hostname=https://${KEYCLOAK_DOMAIN}
+    environment:
+      KC_DB: postgres
+      KC_DB_URL_HOST: keycloak-postgres
+      KC_DB_URL_DATABASE: keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_POSTGRES_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD}
+    expose:
+      - "8080"
+    depends_on:
+      keycloak-postgres:
+        condition: service_healthy
 
   allegrograph:
     # AllegroGraph stores RDF data; only localhost gets a direct host port.
@@ -75,5 +117,6 @@ services:
 volumes:
   # Named volumes keep service state across container recreations.
   allegrograph_data:
+  keycloak_postgres_data:
   caddy_data:
   caddy_config:

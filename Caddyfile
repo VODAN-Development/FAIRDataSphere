@@ -15,3 +15,11 @@
         header_up X-Forwarded-Host {host}
     }
 }
+
+# Keycloak identity provider for SSO/OIDC.
+{$KEYCLOAK_DOMAIN} {
+    reverse_proxy keycloak:8080 {
+        header_up X-Forwarded-Proto https
+        header_up X-Forwarded-Host {host}
+    }
+}
