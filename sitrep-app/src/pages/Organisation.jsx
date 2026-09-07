@@ -126,6 +126,32 @@ const LEAVE_ORGANISATION = gql`
   }
 `;
 
+const GET_URI_MIGRATION_STATUS = gql`
+  query GetUriMigrationStatus($organisationId: ID!) {
+    rdfUriMigrationStatus(organisationId: $organisationId) {
+      organisationId
+      needsMigration
+      currentTemplates
+      targetTemplates
+      predicateChanges
+      affectedTriples
+    }
+  }
+`;
+
+const MIGRATE_ORGANISATION_URIS = gql`
+  mutation MigrateOrganisationUris($organisationId: ID!) {
+    migrateOrganisationUris(organisationId: $organisationId) {
+      organisationId
+      needsMigration
+      currentTemplates
+      targetTemplates
+      predicateChanges
+      affectedTriples
+    }
+  }
+`;
+
 const EMPTY_ORGANISATIONS = [];
 const ACTIVE_ORGANISATION_KEY = 'sitrep.activeOrganisationId';
 const ROLE_PERMISSION_FIELDS = [
@@ -285,6 +311,10 @@ export default function Organisation() {
   const [newRoleName, setNewRoleName] = useState('');
   const [message, setMessage] = useState('');
   const [formError, setFormError] = useState('');
+  const { data: migrationData, loading: migrationStatusLoading, refetch: refetchMigrationStatus } = useQuery(GET_URI_MIGRATION_STATUS, {
+    variables: { organisationId: selectedOrganisationId },
+    skip: user?.role !== 'admin' || !selectedOrganisationId,
+  });
   const [createOrganisation, { loading: creating }] = useMutation(CREATE_ORGANISATION, {
     refetchQueries: ['GetOrganisations'],
   });
@@ -309,6 +339,7 @@ export default function Organisation() {
   const [leaveOrganisation, { loading: leavingOrganisation }] = useMutation(LEAVE_ORGANISATION, {
     refetchQueries: ['GetOrganisations'],
   });
+  const [migrateOrganisationUris, { loading: migratingUris }] = useMutation(MIGRATE_ORGANISATION_URIS);
 
   const myOrganisations = data?.myOrganisations || EMPTY_ORGANISATIONS;
   const managedOrganisations = user?.role === 'admin'
@@ -350,6 +381,7 @@ export default function Organisation() {
   const panelOptions = [
     { id: 'profile', label: 'Profile' },
     { id: 'role', label: 'Roles' },
+    ...(user?.role === 'admin' ? [{ id: 'migration', label: 'URI migration' }] : []),
     { id: 'danger', label: 'Danger' },
   ];
 
@@ -475,6 +507,24 @@ export default function Organisation() {
       setSelectedRoleId(createdRole?.id || selectedRoleId);
       setNewRoleName('');
       setMessage('Role created.');
+    } catch (submissionError) {
+      setFormError(submissionError.message);
+    }
+  }
+
+  async function handleMigrateOrganisationUris() {
+    if (!selectedOrganisation) return;
+    setMessage('');
+    setFormError('');
+    const confirmed = window.confirm(
+      `Migrate the RDF URIs for "${selectedOrganisation.name}" to the id convention?\n\nExisting links will be rewritten and this cannot be undone automatically.`
+    );
+    if (!confirmed) return;
+
+    try {
+      await migrateOrganisationUris({ variables: { organisationId: selectedOrganisation.id } });
+      await refetchMigrationStatus();
+      setMessage('Organisation RDF URIs migrated.');
     } catch (submissionError) {
       setFormError(submissionError.message);
     }
@@ -848,9 +898,38 @@ export default function Organisation() {
     );
   }
 
+  function renderMigrationPanel() {
+    if (user?.role !== 'admin' || !selectedOrganisation) return null;
+    const status = migrationData?.rdfUriMigrationStatus;
+    return (
+      <section className="organisation-detail-section">
+        <h3>URI migration</h3>
+        <p>Review and migrate this organisation's legacy RDF instance URIs to the id convention.</p>
+        {migrationStatusLoading ? <p>Checking URI compatibility...</p> : status && (
+          <>
+            <p>
+              {status.needsMigration
+                ? `${status.affectedTriples} RDF triples use legacy namespaces.`
+                : 'This organisation is already compatible with the id convention.'}
+            </p>
+            {status.predicateChanges?.length > 0 && (
+              <p>Predicate changes: {status.predicateChanges.join(', ')}</p>
+            )}
+            {status.needsMigration && (
+              <button type="button" onClick={handleMigrateOrganisationUris} disabled={migratingUris}>
+                {migratingUris ? 'Migrating...' : 'Migrate organisation URIs'}
+              </button>
+            )}
+          </>
+        )}
+      </section>
+    );
+  }
+
   function renderActivePanel() {
     if (activePanel === 'role') return renderRolePanel();
     if (activePanel === 'access') return renderAccessPanel();
+    if (activePanel === 'migration') return renderMigrationPanel();
     if (activePanel === 'danger') return renderDangerPanel();
     return renderProfilePanel();
   }

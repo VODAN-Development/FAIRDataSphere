@@ -454,6 +454,20 @@ function reportItemMatchesSearch(item, search) {
   return haystack.includes(query);
 }
 
+function sortReportItems(items, direction = 'desc') {
+  return [...items].sort((left, right) => {
+    const leftEntry = Number(left.entryNumber || 0);
+    const rightEntry = Number(right.entryNumber || 0);
+    if (leftEntry !== rightEntry && Number.isFinite(leftEntry) && Number.isFinite(rightEntry)) {
+      return (leftEntry - rightEntry) * (direction === 'asc' ? 1 : -1);
+    }
+    const leftTitle = String(itemTitle(left) || '').toLowerCase();
+    const rightTitle = String(itemTitle(right) || '').toLowerCase();
+    if (leftTitle === rightTitle) return 0;
+    return leftTitle.localeCompare(rightTitle, undefined, { numeric: true, sensitivity: 'base' }) * (direction === 'asc' ? 1 : -1);
+  });
+}
+
 function compiledReportEditableMarkdown(compiledReport) {
   return compiledReport.bodyMarkdown || htmlToPlainMarkdown(compiledReport.bodyHtml || '');
 }
@@ -603,6 +617,7 @@ export default function Reports() {
   const [reportAddSearch, setReportAddSearch] = useState({});
   const [itemSelectionSearch, setItemSelectionSearch] = useState('');
   const [automationItemSearch, setAutomationItemSearch] = useState('');
+  const [itemListSortDirection, setItemListSortDirection] = useState('desc');
   const [selectedReportId, setSelectedReportId] = useState('');
   const [isCreatingReport, setIsCreatingReport] = useState(false);
   const [editingReportId, setEditingReportId] = useState('');
@@ -690,12 +705,12 @@ export default function Reports() {
   }, [fields, formData]);
   const reportItems = useMemo(() => itemsData?.reportItems || [], [itemsData]);
   const searchableReportItems = useMemo(
-    () => reportItems.filter(item => reportItemMatchesSearch(item, itemSelectionSearch)),
-    [itemSelectionSearch, reportItems]
+    () => sortReportItems(reportItems.filter(item => reportItemMatchesSearch(item, itemSelectionSearch)), itemListSortDirection),
+    [itemSelectionSearch, reportItems, itemListSortDirection]
   );
   const searchableAutomationItems = useMemo(
-    () => reportItems.filter(item => reportItemMatchesSearch(item, automationItemSearch)),
-    [automationItemSearch, reportItems]
+    () => sortReportItems(reportItems.filter(item => reportItemMatchesSearch(item, automationItemSearch)), itemListSortDirection),
+    [automationItemSearch, reportItems, itemListSortDirection]
   );
   const reports = useMemo(() => reportsData?.reports || [], [reportsData]);
   const compiledReports = useMemo(() => compiledReportsData?.compiledReports || [], [compiledReportsData]);
@@ -1155,9 +1170,12 @@ export default function Reports() {
 
   const availableItemsForReport = (report) => {
     const search = reportAddSearch[report.id] || '';
-    return reportItems
-      .filter(item => !reportHasItem(report, item))
-      .filter(item => reportItemMatchesSearch(item, search));
+    return sortReportItems(
+      reportItems
+        .filter(item => !reportHasItem(report, item))
+        .filter(item => reportItemMatchesSearch(item, search)),
+      itemListSortDirection
+    );
   };
 
   function renderAutomationPanel() {
@@ -1262,13 +1280,22 @@ export default function Reports() {
           {automationDraft.itemSelectionMode === 'manual' && (
             <div className="report-automation-section">
               <strong>Report items</strong>
-              <input
-                type="search"
-                className="item-search-input"
-                placeholder="Search item number or text"
-                value={automationItemSearch}
-                onChange={(event) => setAutomationItemSearch(event.target.value)}
-              />
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' }}>
+                <input
+                  type="search"
+                  className="item-search-input"
+                  placeholder="Search item number or text"
+                  value={automationItemSearch}
+                  onChange={(event) => setAutomationItemSearch(event.target.value)}
+                />
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>Sort</span>
+                  <select value={itemListSortDirection} onChange={(event) => setItemListSortDirection(event.target.value)} aria-label="Sort report items">
+                    <option value="desc">Descending</option>
+                    <option value="asc">Ascending</option>
+                  </select>
+                </label>
+              </div>
               <div className="compiled-checkbox-list">
                 {searchableAutomationItems.map(item => (
                   <label key={item.entryNumber} className="compiled-checkbox">
@@ -1480,13 +1507,22 @@ export default function Reports() {
 
                 <div className="form-group">
                   <label>Select Report Items:</label>
-                  <input
-                    type="search"
-                    className="item-search-input"
-                    placeholder="Search item number or text"
-                    value={itemSelectionSearch}
-                    onChange={(event) => setItemSelectionSearch(event.target.value)}
-                  />
+                  <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' }}>
+                    <input
+                      type="search"
+                      className="item-search-input"
+                      placeholder="Search item number or text"
+                      value={itemSelectionSearch}
+                      onChange={(event) => setItemSelectionSearch(event.target.value)}
+                    />
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span>Sort</span>
+                      <select value={itemListSortDirection} onChange={(event) => setItemListSortDirection(event.target.value)} aria-label="Sort selected report items">
+                        <option value="desc">Descending</option>
+                        <option value="asc">Ascending</option>
+                      </select>
+                    </label>
+                  </div>
                   <div className="items-selection">
                     {reportItems.length === 0 ? (
                       <p className="no-items-message">No report items available. Create some items first on the Data Input page.</p>
@@ -1762,13 +1798,22 @@ export default function Reports() {
                   return (
                     <div className="add-item-entry">
                       <label htmlFor={`add-item-${selectedReport.id}`}>Add item:</label>
-                      <input
-                        type="search"
-                        className="item-search-input"
-                        placeholder="Search item number or text"
-                        value={reportAddSearch[selectedReport.id] || ''}
-                        onChange={(e) => setReportAddSearch({ ...reportAddSearch, [selectedReport.id]: e.target.value })}
-                      />
+                      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <input
+                          type="search"
+                          className="item-search-input"
+                          placeholder="Search item number or text"
+                          value={reportAddSearch[selectedReport.id] || ''}
+                          onChange={(e) => setReportAddSearch({ ...reportAddSearch, [selectedReport.id]: e.target.value })}
+                        />
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span>Sort</span>
+                          <select value={itemListSortDirection} onChange={(event) => setItemListSortDirection(event.target.value)} aria-label="Sort available report items">
+                            <option value="desc">Descending</option>
+                            <option value="asc">Ascending</option>
+                          </select>
+                        </label>
+                      </div>
                       <select
                         id={`add-item-${selectedReport.id}`}
                         value={reportAddSelection[selectedReport.id] || ''}

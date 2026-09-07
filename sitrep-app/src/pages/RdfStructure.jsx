@@ -99,7 +99,7 @@ const classPropertyOptions = [
   'schema:about',
 ];
 
-const groupPropertyNames = new Set(['label', 'predicate', 'inputType', 'required', 'resourceMode', 'className', 'targetEntityType', 'targetClass', 'targetTemplate', 'targetLabelField', 'importedFields']);
+const groupPropertyNames = new Set(['label', 'predicate', 'inputType', 'required', 'allowMultiple', 'resourceMode', 'className', 'targetEntityType', 'targetClass', 'targetTemplate', 'targetLabelField', 'importedFields']);
 const protectedEntityTypes = new Set(['report', 'reportItem']);
 
 function downloadFile(filename, content, type) {
@@ -1301,7 +1301,6 @@ function importClassRowDefaults(structure, row, targetEntityType = row.targetEnt
     subfields: selectedEntries.map(importedSubfieldFromEntry),
   };
   delete nextRow.targetLabelField;
-  delete nextRow.allowMultiple;
   return nextRow;
 }
 
@@ -1766,8 +1765,8 @@ function FieldTable({ title, rows, onChange, onAdd, onRemove }) {
         <HelpHeader help={columnHelp.name}>Name</HelpHeader>
         <HelpHeader help={columnHelp.label}>Label</HelpHeader>
         <HelpHeader help={columnHelp.predicate}>Predicate</HelpHeader>
-        <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
         <HelpHeader help={columnHelp.input}>Input</HelpHeader>
+        <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
         <HelpHeader help={columnHelp.required}>Required</HelpHeader>
         <HelpHeader help={columnHelp.encrypted}>Encrypt</HelpHeader>
         <ActionHeaderSpacer />
@@ -1797,7 +1796,6 @@ function FieldTable({ title, rows, onChange, onAdd, onRemove }) {
             />
             <input value={row.label || ''} onChange={(e) => updateRow(index, 'label', e.target.value)} />
             <input value={row.predicate || ''} onChange={(e) => updateRow(index, 'predicate', e.target.value)} />
-            <DatatypeInput value={row.datatype} onChange={(value) => updateRow(index, 'datatype', value)} />
             <select value={row.inputType || 'text'} onChange={(e) => updateRow(index, 'inputType', e.target.value)}>
               <option value="text">Text</option>
               <option value="uri">URI</option>
@@ -1806,6 +1804,7 @@ function FieldTable({ title, rows, onChange, onAdd, onRemove }) {
               <option value="number">Number</option>
               <option value="datetime">Date/time</option>
             </select>
+            <DatatypeInput value={row.datatype} onChange={(value) => updateRow(index, 'datatype', value)} />
             <input type="checkbox" checked={!!row.required} onChange={(e) => updateRow(index, 'required', e.target.checked)} />
             <input type="checkbox" checked={!!row.encrypted} onChange={(e) => updateRow(index, 'encrypted', e.target.checked)} />
             <button type="button" className="delete-btn" onClick={() => onRemove(index)}>Remove</button>
@@ -2432,12 +2431,6 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
           <option value="conditional">Conditional subfields</option>
         </select>
         <input value={subfield.predicate || ''} onChange={(e) => onFieldChange('predicate', e.target.value)} />
-        <DatatypeInput
-          value={datatypeDisplayValue(subfield)}
-          onChange={(value) => onFieldChange('datatype', value)}
-          disabled={datatypeIsLocked(subfield)}
-          placeholder="xsd:decimal"
-        />
         <select
           value={subfield.inputType || (subfield.kind === 'array' ? 'text-list' : 'text')}
           onChange={(e) => onFieldChange('inputType', e.target.value)}
@@ -2467,6 +2460,12 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
             </>
           )}
         </select>
+        <DatatypeInput
+          value={datatypeDisplayValue(subfield)}
+          onChange={(value) => onFieldChange('datatype', value)}
+          disabled={datatypeIsLocked(subfield)}
+          placeholder="xsd:decimal"
+        />
         <input type="checkbox" checked={!!subfield.encrypted} onChange={(e) => onFieldChange('encrypted', e.target.checked)} />
         <button type="button" className="delete-btn" onClick={onRemove}>Remove</button>
       </div>
@@ -2494,6 +2493,14 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
               <HelpHeader help={columnHelp.linkedClass}>Class value</HelpHeader>
               <input value={structure?.classes?.[subfield.targetEntityType] || ''} readOnly />
             </div>
+            <label className="rdf-link-control rdf-option-toggle">
+              <span>Multiple instances</span>
+              <input
+                type="checkbox"
+                checked={!!subfield.allowMultiple}
+                onChange={(e) => onFieldChange('allowMultiple', e.target.checked)}
+              />
+            </label>
           </div>
           {(() => {
             const importableFields = importableFieldEntriesForEntity(structure, subfield.targetEntityType);
@@ -2530,8 +2537,8 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
             <HelpHeader help={columnHelp.label}>Label</HelpHeader>
             <HelpHeader help={columnHelp.valueMode}>Value Mode</HelpHeader>
             <HelpHeader help={columnHelp.predicate}>Predicate</HelpHeader>
-            <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
             <HelpHeader help={columnHelp.input}>Input</HelpHeader>
+            <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
             <HelpHeader help={columnHelp.encrypted}>Encrypt</HelpHeader>
             <ActionHeaderSpacer />
           </div>
@@ -2566,8 +2573,8 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
                 <HelpHeader help={columnHelp.label}>Label</HelpHeader>
                 <HelpHeader help={columnHelp.valueMode}>Value Mode</HelpHeader>
                 <HelpHeader help={columnHelp.predicate}>Predicate</HelpHeader>
-                <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
                 <HelpHeader help={columnHelp.input}>Input</HelpHeader>
+                <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
                 <HelpHeader help={columnHelp.encrypted}>Encrypt</HelpHeader>
                 <ActionHeaderSpacer />
               </div>
@@ -2612,8 +2619,8 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
               <label><HelpHeader help={columnHelp.label}>Label</HelpHeader><input value={row.label || ''} onChange={(event) => updateRow(index, 'label', event.target.value)} /></label>
               <label><HelpHeader help={columnHelp.valueMode}>Value mode</HelpHeader><select value={row.kind || 'scalar'} onChange={(event) => updateRow(index, 'kind', event.target.value)}><option value="scalar">Single value</option><option value="array">Multiple values</option><option value="group">Subfields</option><option value="importClass">Import class</option><option value="conditional">Conditional subfields</option></select></label>
               <label><HelpHeader help={columnHelp.predicate}>Predicate</HelpHeader><input value={row.predicate || ''} onChange={(event) => updateRow(index, 'predicate', event.target.value)} /></label>
-              <label><HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader><DatatypeInput value={datatypeDisplayValue(row)} onChange={(value) => updateRow(index, 'datatype', value)} disabled={datatypeIsLocked(row)} /></label>
               <label><HelpHeader help={columnHelp.input}>Input</HelpHeader><select value={row.inputType || (row.kind === 'array' ? 'text-list' : 'text')} onChange={(event) => updateRow(index, 'inputType', event.target.value)} disabled={isLinkedField(row) || row.kind === 'group' || row.kind === 'importClass' || row.kind === 'conditional'}>{row.kind === 'array' ? <><option value="text-list">Text list</option><option value="uri-list">URI list</option></> : row.kind === 'conditional' ? <option value="select">Subfields</option> : row.kind === 'importClass' ? <option value="import-class">Imported fields</option> : row.kind === 'group' ? <option value="text">Subfields</option> : <><option value="text">Text</option><option value="uri">URI</option><option value="textarea">Textarea</option><option value="date">Date</option><option value="number">Number</option><option value="datetime">Date/time</option></>}</select></label>
+              <label><HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader><DatatypeInput value={datatypeDisplayValue(row)} onChange={(value) => updateRow(index, 'datatype', value)} disabled={datatypeIsLocked(row)} /></label>
               <label className="rdf-option-toggle"><input type="checkbox" checked={!!row.required} onChange={(event) => updateRow(index, 'required', event.target.checked)} />Required</label>
               <label className="rdf-option-toggle"><input type="checkbox" checked={!!row.encrypted} onChange={(event) => updateRow(index, 'encrypted', event.target.checked)} />Encrypt</label>
             </div>
@@ -2632,6 +2639,14 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
                     <HelpHeader help={columnHelp.linkedClass}>Class value</HelpHeader>
                     <input value={structure?.classes?.[row.targetEntityType] || ''} readOnly />
                   </div>
+                  <label className="rdf-link-control rdf-option-toggle">
+                    <span>Multiple instances</span>
+                    <input
+                      type="checkbox"
+                      checked={!!row.allowMultiple}
+                      onChange={(event) => updateRow(index, 'allowMultiple', event.target.checked)}
+                    />
+                  </label>
                 </div>
                 {(() => {
                   const importableFields = importableFieldEntriesForEntity(structure, row.targetEntityType);
@@ -2666,8 +2681,8 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
                   <HelpHeader help={columnHelp.label}>Label</HelpHeader>
                   <HelpHeader help={columnHelp.valueMode}>Value Mode</HelpHeader>
                   <HelpHeader help={columnHelp.predicate}>Predicate</HelpHeader>
-                  <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
                   <HelpHeader help={columnHelp.input}>Input</HelpHeader>
+                  <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
                   <HelpHeader help={columnHelp.encrypted}>Encrypt</HelpHeader>
                   <ActionHeaderSpacer />
                 </div>
@@ -2699,8 +2714,8 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
                       <HelpHeader help={columnHelp.label}>Label</HelpHeader>
                       <HelpHeader help={columnHelp.valueMode}>Value Mode</HelpHeader>
                       <HelpHeader help={columnHelp.predicate}>Predicate</HelpHeader>
-                      <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
                       <HelpHeader help={columnHelp.input}>Input</HelpHeader>
+                      <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
                       <HelpHeader help={columnHelp.encrypted}>Encrypt</HelpHeader>
                       <ActionHeaderSpacer />
                     </div>
@@ -2732,8 +2747,8 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
         <HelpHeader help={columnHelp.label}>Label</HelpHeader>
         <HelpHeader help={columnHelp.valueMode}>Value Mode</HelpHeader>
         <HelpHeader help={columnHelp.predicate}>Predicate</HelpHeader>
-        <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
         <HelpHeader help={columnHelp.input}>Input</HelpHeader>
+        <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
         <HelpHeader help={columnHelp.required}>Required</HelpHeader>
         <HelpHeader help={columnHelp.encrypted}>Encrypt</HelpHeader>
         <ActionHeaderSpacer />
@@ -2773,11 +2788,6 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
               value={row.predicate || ''}
               onChange={(e) => updateRow(index, 'predicate', e.target.value)}
             />
-            <DatatypeInput
-              value={datatypeDisplayValue(row)}
-              onChange={(value) => updateRow(index, 'datatype', value)}
-              disabled={datatypeIsLocked(row)}
-            />
             <select
               value={row.inputType || (row.kind === 'array' ? 'text-list' : 'text')}
               onChange={(e) => updateRow(index, 'inputType', e.target.value)}
@@ -2805,6 +2815,11 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
                 </>
               )}
             </select>
+            <DatatypeInput
+              value={datatypeDisplayValue(row)}
+              onChange={(value) => updateRow(index, 'datatype', value)}
+              disabled={datatypeIsLocked(row)}
+            />
             <input type="checkbox" checked={!!row.required} onChange={(e) => updateRow(index, 'required', e.target.checked)} />
             <input type="checkbox" checked={!!row.encrypted} onChange={(e) => updateRow(index, 'encrypted', e.target.checked)} />
             <button type="button" className="delete-btn" onClick={() => onRemove(index)}>Remove</button>
@@ -2863,6 +2878,14 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
                     <HelpHeader help={columnHelp.linkedClass}>Class value</HelpHeader>
                     <input value={structure?.classes?.[row.targetEntityType] || ''} readOnly />
                   </div>
+                  <label className="rdf-link-control rdf-option-toggle">
+                    <span>Multiple instances</span>
+                    <input
+                      type="checkbox"
+                      checked={!!row.allowMultiple}
+                      onChange={(e) => updateRow(index, 'allowMultiple', e.target.checked)}
+                    />
+                  </label>
                 </div>
                 {(() => {
                   const importableFields = importableFieldEntriesForEntity(structure, row.targetEntityType);
@@ -2943,8 +2966,8 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
                       <HelpHeader help={columnHelp.label}>Label</HelpHeader>
                       <HelpHeader help={columnHelp.valueMode}>Value Mode</HelpHeader>
                       <HelpHeader help={columnHelp.predicate}>Predicate</HelpHeader>
-                      <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
                       <HelpHeader help={columnHelp.input}>Input</HelpHeader>
+                      <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
                       <HelpHeader help={columnHelp.encrypted}>Encrypt</HelpHeader>
                       <ActionHeaderSpacer />
                     </div>
@@ -2997,8 +3020,8 @@ function CombinedFieldTable({ title, rows, structure, selectedEntityType, onChan
                           <HelpHeader help={columnHelp.label}>Label</HelpHeader>
                           <HelpHeader help={columnHelp.valueMode}>Value Mode</HelpHeader>
                           <HelpHeader help={columnHelp.predicate}>Predicate</HelpHeader>
-                          <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
                           <HelpHeader help={columnHelp.input}>Input</HelpHeader>
+                          <HelpHeader help={columnHelp.datatype}>Datatype</HelpHeader>
                           <HelpHeader help={columnHelp.encrypted}>Encrypt</HelpHeader>
                           <ActionHeaderSpacer />
                         </div>
@@ -3311,9 +3334,13 @@ function RdfStructureEditor({ activeOrganisationCanWrite, activeOrganisationId, 
     setRawJson(JSON.stringify(refreshImportedClassFieldsInStructure(nextStructure), null, 2));
   };
 
-  const deleteClass = (entityType) => {
+  const deleteClass = async (entityType) => {
     if (!canWriteStructure) return;
     if (protectedEntityTypes.has(entityType)) return;
+    const confirmed = await confirmAction(`Delete class "${entityType}"? This removes its fields and class relationships from the RDF structure.`, {
+      confirmLabel: 'Delete class',
+    });
+    if (!confirmed) return;
     const nextClasses = omitKeys(structure.classes || {}, [entityType]);
     const nextUriTemplates = omitKeys(structure.uriTemplates || {}, [entityType]);
     const nextEquivalentClasses = removeEquivalentClassReferences(structure, structure.equivalentClasses || {}, entityType);

@@ -1,10 +1,11 @@
 // Default RDF ontology and form structure used when no organisation-specific
 // structure has been saved yet. The UI can edit most fields, but generated and
 // metadata-only fields below preserve core report/report-item behavior.
-export const DEFAULT_RDF = {
+const BASE_DEFAULT_RDF = {
   prefixes: {
     sitrep: "http://sitrep.example.org/ontology#",
     resource: "http://sitrep.example.org/resource/",
+    id: "http://sitrep.example.org/id/",
     xsd: "http://www.w3.org/2001/XMLSchema#",
     rdf: "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
     rdfs: "http://www.w3.org/2000/01/rdf-schema#",
@@ -32,14 +33,14 @@ export const DEFAULT_RDF = {
   },
   classProperties: [],
   uriTemplates: {
-    report: "resource:Report_{reportNumber}",
-    reportItem: "resource:ReportItem_{entryNumber}",
-    location: "resource:Location_{id}",
-    organisation: "resource:Organisation_{id}",
-    perpetrator: "resource:Perpetrator_{id}",
-    person: "resource:Person_{id}",
-    place: "resource:Place_{id}",
-    victim: "resource:Victim_{id}",
+    report: "id:Report_{reportNumber}",
+    reportItem: "id:ReportItem_{entryNumber}",
+    location: "id:Location_{id}",
+    organisation: "id:Organisation_{id}",
+    perpetrator: "id:Perpetrator_{id}",
+    person: "id:Person_{id}",
+    place: "id:Place_{id}",
+    victim: "id:Victim_{id}",
   },
   reportItem: {
     idField: "entryNumber",
@@ -56,7 +57,7 @@ export const DEFAULT_RDF = {
         className: "hds:Location",
         targetEntityType: "location",
         targetClass: "hds:Location",
-        targetTemplate: "resource:Location_{id}",
+        targetTemplate: "id:Location_{id}",
         importedFields: [
           "name",
           "country",
@@ -114,7 +115,7 @@ export const DEFAULT_RDF = {
               className: "hds:Victim",
               targetEntityType: "victim",
               targetClass: "hds:Victim",
-              targetTemplate: "resource:Victim_{id}",
+              targetTemplate: "id:Victim_{id}",
               importedFields: ["name"],
               name: { predicate: "hds:name", required: true, datatype: "xsd:string", label: "Name", inputType: "text" },
             },
@@ -178,10 +179,10 @@ export const DEFAULT_RDF = {
             label: "International response or event",
             inputType: "text",
             responseType: { predicate: "sitrep:responseType", variable: "responseType", label: "Type of event", inputType: "text" },
-            involvedGovernments: { predicate: "hds:involved", variable: "involvedGovernments", label: "Involved governments", inputType: "text-list" },
+            involvedGovernments: { predicate: "hds:involvedGov", variable: "involvedGovernments", label: "Involved governments", inputType: "text-list" },
             involvedOrganisations: {
               label: "Involved international organizations",
-              predicate: "hds:involved",
+              predicate: "hds:involvedIntOrg",
               inputType: "import-class",
               resourceMode: "per-instance",
               className: "hds:Organisation",
@@ -191,7 +192,7 @@ export const DEFAULT_RDF = {
               importedFields: ["name"],
               name: { predicate: "hds:name", required: true, datatype: "xsd:string", label: "Name", inputType: "text" },
             },
-            irInvolvedParties: { predicate: "hds:involved", variable: "irInvolvedParties", label: "Other involved parties", inputType: "text-list" },
+            irInvolvedParties: { predicate: "hds:involvedParties", variable: "irInvolvedParties", label: "Other involved parties", inputType: "text-list" },
             responseDescription: { predicate: "hds:description", variable: "responseDescription", label: "Description", inputType: "textarea" },
           },
           humanTrafficking: {
@@ -225,7 +226,7 @@ export const DEFAULT_RDF = {
               className: "hds:Perpetrator",
               targetEntityType: "perpetrator",
               targetClass: "hds:Perpetrator",
-              targetTemplate: "resource:Perpetrator_{id}",
+              targetTemplate: "id:Perpetrator_{id}",
               importedFields: ["name"],
               name: { predicate: "hds:name", required: true, datatype: "xsd:string", label: "Name", inputType: "text" },
             },
@@ -303,4 +304,72 @@ export const DEFAULT_RDF = {
     },
   }
 };
+
+const DEFAULT_DATATYPE_BY_INPUT_TYPE = {
+  text: "xsd:string",
+  textarea: "xsd:string",
+  "text-list": "xsd:string",
+  date: "xsd:date",
+  datetime: "xsd:dateTime",
+  number: "xsd:integer",
+};
+
+const GROUP_INPUT_TYPES = new Set(["import-class", "location"]);
+
+function normalizeDefaultNamespaces(structure) {
+  const normalizeFields = fields => Object.fromEntries(
+    Object.entries(fields || {}).map(([fieldName, field]) => {
+      if (!field || typeof field !== "object") return [fieldName, field];
+      const nestedFields = Object.fromEntries(
+        Object.entries(field).filter(([, value]) => value && typeof value === "object" && value.predicate)
+      );
+      const inputType = field.inputType || "text";
+      const shouldAddDatatype = !field.datatype
+        && field.objectType !== "uri"
+        && !field.options
+        && !GROUP_INPUT_TYPES.has(inputType)
+        && Object.keys(nestedFields).length === 0;
+      const nextField = {
+        ...field,
+        ...(field.predicate?.startsWith("hds:")
+          ? { predicate: field.predicate.replace(/^hds:/, "sitrep:") }
+          : {}),
+        ...(field.targetTemplate?.startsWith("resource:")
+          ? { targetTemplate: field.targetTemplate.replace(/^resource:/, "id:") }
+          : {}),
+        ...(shouldAddDatatype
+          ? { datatype: DEFAULT_DATATYPE_BY_INPUT_TYPE[inputType] || "xsd:string" }
+          : {}),
+      };
+      Object.assign(nextField, normalizeFields(nestedFields));
+      nextField.options = field.options
+        ? Object.fromEntries(Object.entries(field.options).map(([optionName, option]) => [
+            optionName,
+            {
+              ...option,
+              ...(option.fields
+                ? { fields: normalizeFields(option.fields) }
+                : normalizeFields(Object.fromEntries(
+                    Object.entries(option).filter(([, value]) => value && typeof value === "object" && value.predicate)
+                  )))
+            },
+          ]))
+        : field.options;
+      return [fieldName, nextField];
+    })
+  );
+
+  return {
+    ...structure,
+    ...(structure.reportItem ? { reportItem: { ...structure.reportItem, fields: normalizeFields(structure.reportItem.fields) } } : {}),
+    ...(structure.report ? { report: { ...structure.report, fields: normalizeFields(structure.report.fields) } } : {}),
+    ...Object.fromEntries(
+      Object.keys(structure).filter(key => !["report", "reportItem", "prefixes", "classes", "equivalentClasses", "classProperties", "uriTemplates"].includes(key))
+        .filter(key => structure[key]?.fields)
+        .map(key => [key, { ...structure[key], fields: normalizeFields(structure[key].fields) }])
+    ),
+  };
+}
+
+export const DEFAULT_RDF = normalizeDefaultNamespaces(BASE_DEFAULT_RDF);
 

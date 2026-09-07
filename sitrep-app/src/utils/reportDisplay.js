@@ -13,10 +13,49 @@ export function titleForEntity(entityType) {
 }
 
 function compactUri(value) {
+  if (value === null || value === undefined || value === '') return '';
+  if (Array.isArray(value)) {
+    return value.map(item => compactUri(item)).filter(Boolean).join(', ');
+  }
+  if (typeof value === 'object') {
+    const preferredLabel = ['name', 'label', 'title'].map(key => value[key]).find(candidate => candidate !== null && candidate !== undefined && candidate !== '');
+    if (preferredLabel !== undefined) {
+      return compactUri(preferredLabel);
+    }
+    const entries = Object.entries(value)
+      .map(([key, nestedValue]) => {
+        const formatted = compactUri(nestedValue);
+        return formatted ? `${key}: ${formatted}` : null;
+      })
+      .filter(Boolean);
+    return entries.length > 0 ? entries.join(', ') : '[object Object]';
+  }
+
   // Show the local name of common HTTP IRIs so tables stay readable.
-  const text = String(value || '');
-  const match = text.match(/^(https?:\/\/[^#]+[#/])([^#/]+)$/);
-  return match ? decodeURIComponent(match[2]).replace(/_/g, ' ') : text;
+  const text = String(value).trim().replace(/^<|>$/g, '');
+  const iriMatch = text.match(/^https?:\/\/.*[#/]([^#/]+)\/?$/i);
+  if (iriMatch) return decodeURIComponent(iriMatch[1]).replace(/_/g, ' ');
+  const prefixedMatch = text.match(/^[A-Za-z][\w-]*:([^:/#]+)$/);
+  return prefixedMatch ? prefixedMatch[1].replace(/_/g, ' ') : text;
+}
+
+function formattedObjectValue(value) {
+  if (value === null || value === undefined || value === '') return '';
+  if (Array.isArray(value)) return value.map(item => formattedObjectValue(item)).filter(Boolean).join(', ');
+  if (typeof value === 'object') {
+    const preferredLabel = ['name', 'label', 'title'].map(key => value[key]).find(candidate => candidate !== null && candidate !== undefined && candidate !== '');
+    if (preferredLabel !== undefined) {
+      return compactUri(preferredLabel);
+    }
+    const entries = Object.entries(value)
+      .map(([key, nestedValue]) => {
+        const formatted = formattedObjectValue(nestedValue);
+        return formatted ? `${key}: ${formatted}` : null;
+      })
+      .filter(Boolean);
+    return entries.join(', ');
+  }
+  return compactUri(value);
 }
 
 export function displayValue(field) {
@@ -25,7 +64,7 @@ export function displayValue(field) {
   if (!field.value) return '';
   if (field.kind === 'array') {
     try {
-      const value = JSON.parse(field.value);
+      const value = typeof field.value === 'string' ? JSON.parse(field.value) : field.value;
       return Array.isArray(value) ? value.map(compactUri).join(', ') : compactUri(value);
     } catch {
       return compactUri(field.value);
@@ -34,18 +73,29 @@ export function displayValue(field) {
   if (field.kind === 'group' || field.kind === 'location' || field.kind === 'importClass') {
     let groupValue;
     try {
-      groupValue = JSON.parse(field.value);
+      groupValue = typeof field.value === 'string' ? JSON.parse(field.value) : field.value;
     } catch {
       return field.value;
     }
-    const displayGroup = (valueGroup) => (field.subfields || [])
-      .map(subfield => {
-        const value = valueGroup?.[subfield.name];
-        const display = Array.isArray(value) ? value.map(compactUri).join(', ') : compactUri(value);
-        return display ? `${subfield.label || subfield.name}: ${display}` : null;
-      })
-      .filter(Boolean)
-      .join(', ');
+    const displayGroup = (valueGroup) => {
+      const subfields = field.subfields || [];
+      const fieldEntries = subfields.length > 0
+        ? subfields
+            .map(subfield => {
+              const value = valueGroup?.[subfield.name];
+              const display = formattedObjectValue(value);
+              return display ? `${subfield.label || subfield.name}: ${display}` : null;
+            })
+            .filter(Boolean)
+        : Object.entries(valueGroup || {})
+            .map(([key, value]) => {
+              const display = formattedObjectValue(value);
+              return display ? `${key}: ${display}` : null;
+            })
+            .filter(Boolean);
+
+      return fieldEntries.join(', ');
+    };
     return (Array.isArray(groupValue) ? groupValue : [groupValue])
       .map(displayGroup)
       .filter(Boolean)

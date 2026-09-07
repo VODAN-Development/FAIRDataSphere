@@ -78,7 +78,7 @@ const UPDATE_RDF_STRUCTURE = gql`
   }
 `;
 
-const groupPropertyNames = new Set(['label', 'predicate', 'inputType', 'required', 'resourceMode', 'className', 'targetEntityType', 'targetClass', 'targetTemplate', 'targetLabelField']);
+const groupPropertyNames = new Set(['label', 'predicate', 'inputType', 'required', 'allowMultiple', 'resourceMode', 'className', 'targetEntityType', 'targetClass', 'targetTemplate', 'targetLabelField', 'importedFields']);
 
 function groupSubfieldEntries(group = {}) {
   // Group metadata keys should not be treated as editable subfields.
@@ -103,9 +103,9 @@ function fieldPayloadFromStructure(name, field = {}) {
   // array of field payloads with kind/subfield metadata.
   const kind = fieldKind(field);
   return {
+    ...field,
     name,
     kind,
-    ...field,
     subfields: kind === 'group' || kind === 'importClass'
       ? groupSubfieldEntries(field).map(([subfieldName, subfield]) => fieldPayloadFromStructure(subfieldName, subfield))
       : undefined,

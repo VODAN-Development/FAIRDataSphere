@@ -14,6 +14,7 @@ const GROUP_PROPERTY_NAMES = new Set([
   "inputType",
   "required",
   "encrypted",
+  "allowMultiple",
   "resourceMode",
   "className",
   "targetEntityType",
@@ -23,6 +24,14 @@ const GROUP_PROPERTY_NAMES = new Set([
   "importedFields",
 ]);
 const LEGACY_EVENT_TYPE_OPTION_NAMES = new Set(Object.keys(DEFAULT_RDF.reportItem.fields.eventType.options || {}));
+const DEFAULT_DATATYPE_BY_INPUT_TYPE = {
+  text: "xsd:string",
+  textarea: "xsd:string",
+  "text-list": "xsd:string",
+  date: "xsd:date",
+  datetime: "xsd:dateTime",
+  number: "xsd:integer",
+};
 
 // Turn prefix config into the PREFIX block shared by all generated SPARQL.
 function prefixesFromStructure(structure) {
@@ -125,6 +134,35 @@ function mergeRdfStructure(defaultStructure, persistedStructure) {
 
 export function defaultRdfStructure() {
   return normalizeStructure(deepClone(DEFAULT_RDF));
+}
+
+export function legacyDefaultRdfStructure() {
+  // Organisations created before the id convention may not have a structure
+  // file yet. Keep their implicit defaults on the former resource namespace.
+  const legacy = defaultRdfStructure();
+  legacy.prefixes = { ...legacy.prefixes, id: legacy.prefixes.resource };
+  legacy.uriTemplates = Object.fromEntries(
+    Object.entries(legacy.uriTemplates || {}).map(([entityType, template]) => [
+      entityType,
+      String(template).replace(/^id:/, "resource:"),
+    ])
+  );
+  const replaceTemplates = fields => Object.fromEntries(
+    Object.entries(fields || {}).map(([name, field]) => [
+      name,
+      field && typeof field === "object"
+        ? {
+            ...field,
+            ...(field.targetTemplate ? { targetTemplate: String(field.targetTemplate).replace(/^id:/, "resource:") } : {}),
+            ...((groupSubfieldEntries(field).length > 0) ? replaceTemplates(Object.fromEntries(groupSubfieldEntries(field))) : {}),
+          }
+        : field,
+    ])
+  );
+  Object.keys(legacy).forEach(entityType => {
+    if (legacy[entityType]?.fields) legacy[entityType].fields = replaceTemplates(legacy[entityType].fields);
+  });
+  return legacy;
 }
 
 function loadPersistedStructure() {
@@ -278,8 +316,8 @@ function normalizeStructure(structure) {
   normalized.classProperties = Array.isArray(normalized.classProperties) ? normalized.classProperties : [];
   normalized.uriTemplates = {
     ...(normalized.uriTemplates || {}),
-    report: DEFAULT_RDF.uriTemplates.report,
-    reportItem: DEFAULT_RDF.uriTemplates.reportItem,
+    report: normalized.uriTemplates?.report || DEFAULT_RDF.uriTemplates.report,
+    reportItem: normalized.uriTemplates?.reportItem || DEFAULT_RDF.uriTemplates.reportItem,
   };
   Object.keys({ ...normalized.classes, ...normalized.uriTemplates }).forEach(entityType => {
     normalized[entityType] = normalizeEntityStructure(entityType, normalizeUnifiedFields(normalized[entityType]), normalized.uriTemplates?.[entityType]);
@@ -301,11 +339,41 @@ function normalizeStructure(structure) {
   };
   delete normalized.report.selectedItems;
   delete normalized.report.fieldOrder;
-  normalized.uriTemplates.report = DEFAULT_RDF.uriTemplates.report;
+  // Persisted organisation structures own their URI conventions. Only fill a
+  // missing protected template; do not silently rewrite legacy organisations.
+  normalized.uriTemplates.report = normalized.uriTemplates.report || DEFAULT_RDF.uriTemplates.report;
+  normalized.uriTemplates.reportItem = normalized.uriTemplates.reportItem || DEFAULT_RDF.uriTemplates.reportItem;
   normalizeEventTypeOptions(normalized);
+  normalizeDefaultDatatypes(normalized);
   normalizeCreateEntityTemplates(normalized);
   stripDirectionSettings(normalized);
   return normalized;
+}
+
+function normalizeDefaultDatatypes(structure) {
+  Object.keys({ ...(structure.classes || {}), ...(structure.uriTemplates || {}) }).forEach(entityType => {
+    normalizeDefaultDatatypesForFields(structure[entityType]?.fields || {});
+  });
+}
+
+function normalizeDefaultDatatypesForFields(fields = {}) {
+  Object.values(fields || {}).forEach(field => {
+    if (!field || typeof field !== "object") return;
+    if (field.options) {
+      Object.values(field.options || {}).forEach(option => {
+        normalizeDefaultDatatypesForFields(option.fields || {});
+      });
+      return;
+    }
+    if (isGroupField(field)) {
+      normalizeDefaultDatatypesForFields(Object.fromEntries(groupSubfieldEntries(field)));
+      return;
+    }
+    if (field.objectType !== "uri" && !field.datatype) {
+      const datatype = DEFAULT_DATATYPE_BY_INPUT_TYPE[field.inputType || "text"];
+      if (datatype) field.datatype = datatype;
+    }
+  });
 }
 
 function stripDirectionSettings(structure) {
@@ -361,9 +429,6 @@ function labelFieldForEntityInStructure(structure, entityType) {
 function normalizeCreateEntityTemplatesForFields(structure, fields) {
   Object.values(fields || {}).forEach(field => {
     if (!field || typeof field !== "object") return;
-    if (field.inputType === "import-class") {
-      delete field.allowMultiple;
-    }
     if (field.targetEntityType) {
       field.targetClass = field.targetClass || structure.classes?.[field.targetEntityType];
       field.targetTemplate = field.targetTemplate || structure.uriTemplates?.[field.targetEntityType];
@@ -670,6 +735,13 @@ export function expandPrefixedName(term) {
   return RDF.prefixes?.[prefix] ? `${RDF.prefixes[prefix]}${localName}` : term;
 }
 
+export function sparqlTerm(term) {
+  const value = String(term || "").trim();
+  if (!value || value.startsWith("?") || value.startsWith("<")) return value;
+  if (/^https?:\/\//i.test(value)) return `<${value}>`;
+  return value;
+}
+
 export function termToIri(term) {
   if (!term) return null;
   const trimmedTerm = String(term).trim();
@@ -700,11 +772,11 @@ export function triple(subject, predicate, value, datatypeOrField) {
   const field = typeof datatypeOrField === "object" ? datatypeOrField : { datatype: datatypeOrField };
   const object = objectTerm(value, field);
   if (!object) return "";
-  return `${subject} ${predicate} ${object} .\n`;
+  return `${sparqlTerm(subject)} ${sparqlTerm(predicate)} ${object} .\n`;
 }
 
 export function rdfTypeTriple(subject, className) {
-  return `${subject} rdf:type ${className} .\n`;
+  return `${sparqlTerm(subject)} rdf:type ${sparqlTerm(className)} .\n`;
 }
 
 export function classTermForEquivalentClass(structure, equivalentClass) {
@@ -745,7 +817,7 @@ export function classPropertyTriples(structure = RDF) {
 
 export function ontologyTriples(structure = RDF) {
   return classPropertyTriples(structure)
-    .map(({ subject, predicate, object }) => `${subject} ${predicate} ${object} .\n`)
+    .map(({ subject, predicate, object }) => `${sparqlTerm(subject)} ${sparqlTerm(predicate)} ${sparqlTerm(object)} .\n`)
     .join("");
 }
 
@@ -764,13 +836,13 @@ export function fieldPatterns(subject, fields) {
         seenOptionalPredicates.add(field.predicate);
       }
       if (field.options) {
-        const optionPatterns = Object.values(field.options).map(() => `{ ${subject} ${field.predicate} ?${fieldName} . }`);
+        const optionPatterns = Object.values(field.options).map(() => `{ ${sparqlTerm(subject)} ${sparqlTerm(field.predicate)} ?${fieldName} . }`);
         const pattern = optionPatterns.length > 0
           ? optionPatterns.join("\nUNION\n")
-          : `${subject} ${field.predicate} ?${fieldName} .`;
+          : `${sparqlTerm(subject)} ${sparqlTerm(field.predicate)} ?${fieldName} .`;
         return field.required ? pattern : `OPTIONAL { ${pattern} }`;
       }
-      const triplePattern = `${subject} ${field.predicate} ?${fieldName} .`;
+      const triplePattern = `${sparqlTerm(subject)} ${sparqlTerm(field.predicate)} ?${fieldName} .`;
       const pattern = triplePattern;
       return field.required ? pattern : `OPTIONAL { ${pattern} }`;
     })

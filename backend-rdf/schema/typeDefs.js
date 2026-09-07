@@ -82,6 +82,15 @@ export default `#graphql
     reportFields: [RdfStructureField!]!
   }
 
+  type RdfUriMigrationStatus {
+    organisationId: ID!
+    needsMigration: Boolean!
+    currentTemplates: [String!]!
+    targetTemplates: [String!]!
+    predicateChanges: [String!]!
+    affectedTriples: Int!
+  }
+
   # Presets let global admins or organisation owners reuse RDF structures.
   type RdfStructurePreset {
     id: ID!
@@ -259,6 +268,7 @@ export default `#graphql
     # RDF structure and generic entity browsing.
     rdfStructure(organisationId: ID): RdfStructure!
     rdfStructurePresets(organisationId: ID): [RdfStructurePreset!]!
+    rdfUriMigrationStatus(organisationId: ID!): RdfUriMigrationStatus!
     rdfEntities(entityType: String!, organisationId: ID, limit: Int, offset: Int): [RdfEntity!]!
     rdfEntityCount(entityType: String!, organisationId: ID): Int!
 
@@ -299,6 +309,7 @@ export default `#graphql
 
     # RDF structure editing and preset management.
     updateRdfStructure(json: String!, organisationId: ID): RdfStructure!
+    migrateOrganisationUris(organisationId: ID!): RdfUriMigrationStatus!
     saveRdfStructurePreset(name: String!, json: String!, organisationId: ID, scope: String): RdfStructurePreset!
     loadRdfStructurePreset(id: ID!, organisationId: ID, scope: String): RdfStructure!
     deleteRdfStructurePreset(id: ID!, organisationId: ID, scope: String): Boolean!

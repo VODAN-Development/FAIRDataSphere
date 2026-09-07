@@ -50,6 +50,15 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
 
   const isGroupField = (field) => field.kind === 'group' || field.kind === 'location' || field.kind === 'importClass';
 
+  const editDisplayValue = (value, compactImportedValue) => {
+    if (!compactImportedValue || value === null || value === undefined) return value;
+    if (Array.isArray(value)) return value.map(item => editDisplayValue(item, true));
+    if (typeof value !== 'string') return value;
+    const uri = value.trim().replace(/^<|>$/g, '');
+    const match = uri.match(/^https?:\/\/.*[#/]([^#/]+)\/?$/i);
+    return match ? decodeURIComponent(match[1]).replace(/_/g, ' ') : value;
+  };
+
   const emptyGroupValue = (field) => Object.fromEntries((field.subfields || []).map(subfield => [
     subfield.name,
     isListField(subfield) ? [''] : '',
@@ -249,6 +258,7 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
     field,
     groupValue,
     idPrefix,
+    compactImportedValues = field.inputType === 'import-class' || !!field.targetEntityType,
     onSubfieldChange,
     onListSubfieldChange,
     onAddListSubfield,
@@ -297,6 +307,7 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
                   field: subfield,
                   groupValue: nestedGroupValue,
                   idPrefix: `${idPrefix}-${subfield.name}-${nestedGroupIndex}`,
+                  compactImportedValues,
                   onSubfieldChange: (nestedName, value) => setNestedGroupValue({
                     ...(nestedGroupValue || {}),
                     [nestedName]: value,
@@ -401,7 +412,7 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
                 ref={index === 0 ? registerInput(subfield.name) : undefined}
                 id={`${idPrefix}-${subfield.name}-${index}`}
                 type="text"
-                value={value}
+                value={editDisplayValue(value, compactImportedValues)}
                 onChange={(e) => onListSubfieldChange(subfield.name, index, e.target.value)}
                 disabled={disabled}
               />
@@ -422,7 +433,7 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
             id={`${idPrefix}-${subfield.name}`}
             type={inputTypeForField(subfield)}
             step={inputTypeForField(subfield) === 'number' ? '0.0001' : undefined}
-            value={groupValue?.[subfield.name] || ''}
+            value={editDisplayValue(groupValue?.[subfield.name] || '', compactImportedValues)}
             onChange={(e) => onSubfieldChange(subfield.name, e.target.value)}
             disabled={disabled}
           />
@@ -486,6 +497,7 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
                                   field: subfield,
                                   groupValue,
                                   idPrefix: `${field.name}-${subfield.name}-${groupIndex}`,
+                                  compactImportedValues: field.inputType === 'import-class' || !!field.targetEntityType,
                                   onSubfieldChange: (subfieldName, value) => updateConditionalGroupSubfield(field, subfield, groupIndex, subfieldName, value),
                                   onListSubfieldChange: (subfieldName, valueIndex, value) => updateConditionalGroupListSubfield(field, subfield, groupIndex, subfieldName, valueIndex, value),
                                   onAddListSubfield: (subfieldName) => addConditionalGroupListSubfield(field, subfield, groupIndex, subfieldName),
@@ -510,7 +522,7 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
                                   ref={index === 0 ? registerInput(subfield.name) : undefined}
                                   id={`${field.name}-${subfield.name}-${index}`}
                                   type="text"
-                                  value={value}
+                                  value={editDisplayValue(value, !!field.targetEntityType)}
                                   onChange={(e) => updateConditionalListSubfield(field, subfield.name, index, e.target.value)}
                                   disabled={disabled}
                                 />
@@ -622,7 +634,7 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
             <textarea
               ref={registerInput(field.name)}
               id={field.name}
-              value={values[field.name] || ''}
+              value={editDisplayValue(values[field.name] || '', !!field.targetEntityType)}
               onChange={(e) => updateValue(field.name, e.target.value)}
               required={field.required}
               rows="4"
@@ -633,7 +645,7 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
               ref={registerInput(field.name)}
               id={field.name}
               type={field.inputType === 'date' ? 'date' : field.inputType === 'number' ? 'number' : 'text'}
-              value={values[field.name] || ''}
+              value={editDisplayValue(values[field.name] || '', !!field.targetEntityType)}
               onChange={(e) => updateValue(field.name, e.target.value)}
               required={field.required}
               disabled={disabled}

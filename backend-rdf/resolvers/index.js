@@ -36,6 +36,7 @@ import {
   classTermForEquivalentClass,
   classPropertyTriples,
   defaultRdfStructure,
+  legacyDefaultRdfStructure,
   entityIdField,
   equivalentClassValues,
   editableFieldEntries,
@@ -61,6 +62,7 @@ import {
   rdfStructureJson,
   rdfTypeTriple,
   selectVariables,
+  sparqlTerm,
   triplesFromFields,
   triplesFromNestedGroups,
   applyRdfStructureFromJson,
@@ -433,7 +435,7 @@ async function linkedEntityUriExists(field, value) {
   const result = await runSparqlQuery(`${PREFIXES}
     SELECT ?entity WHERE {
       BIND(${subject} AS ?entity)
-      ${className ? `?entity rdf:type ${className} .` : "?entity ?p ?o ."}
+      ${className ? `?entity rdf:type ${sparqlTerm(className)} .` : "?entity ?p ?o ."}
     }
     LIMIT 1
   `);
@@ -451,8 +453,8 @@ async function nextEntityId(entityType) {
   if (idField?.predicate && className) {
     const fieldResult = await runSparqlQuery(`${PREFIXES}
       SELECT ?id WHERE {
-        ?entity rdf:type ${className} ;
-                ${idField.predicate} ?id .
+        ?entity rdf:type ${sparqlTerm(className)} ;
+                ${sparqlTerm(idField.predicate)} ?id .
       }
     `);
     idValues.push(maxNumericBinding(fieldResult, "id"));
@@ -461,7 +463,7 @@ async function nextEntityId(entityType) {
   if (className && RDF.uriTemplates?.[entityType]) {
     const uriResult = await runSparqlQuery(`${PREFIXES}
       SELECT ?id WHERE {
-        ?entity rdf:type ${className} .
+        ?entity rdf:type ${sparqlTerm(className)} .
         BIND(REPLACE(STR(?entity), "${entityIdReplacePattern(entityType)}", "") AS ?idText)
         FILTER(REGEX(?idText, "^[0-9]+$"))
         BIND(xsd:integer(?idText) AS ?id)
@@ -493,6 +495,12 @@ function fieldHasInputValue(value) {
     return Object.values(value).some(fieldHasInputValue);
   }
   return String(value || "").trim() !== "";
+}
+
+function groupFieldAllowsMultiple(field = {}) {
+  // Group read shape must match write shape: imported classes are repeated only
+  // when the RDF structure explicitly enables multiple instances.
+  return !!field.allowMultiple;
 }
 
 function linkedFieldEntriesForSharedEntity(fields = {}) {
@@ -685,7 +693,7 @@ async function clearItemReportMetadata(itemId) {
   const reportItemMetadataFields = pickFields(RDF.reportItem.fields, RDF.itemReportMetadataFields);
   if (Object.keys(reportItemMetadataFields).length === 0) return;
   const deletes = Object.entries(reportItemMetadataFields)
-    .map(([fieldName, field]) => `DELETE WHERE { ${subject} ${field.predicate} ?${fieldName} . }`)
+    .map(([fieldName, field]) => `DELETE WHERE { ${sparqlTerm(subject)} ${sparqlTerm(field.predicate)} ?${fieldName} . }`)
     .join(";\n");
 
   await runSparqlUpdate(`${PREFIXES}
@@ -705,11 +713,11 @@ async function deleteNestedGroupTriplesForSubject(entityType, subject) {
           ?groupSubject ?p ?o .
         }
         WHERE {
-          ${subject} ${group.predicate} ?groupSubject .
+          ${sparqlTerm(subject)} ${sparqlTerm(group.predicate)} ?groupSubject .
           ?groupSubject ?p ?o .
         }`;
       }
-      return `DELETE WHERE { ${nestedGroupUri(subject, groupName)} ?p ?o . }`;
+      return `DELETE WHERE { ${sparqlTerm(nestedGroupUri(subject, groupName))} ?p ?o . }`;
     })
     .join(";\n");
   if (!deletes) return;
@@ -741,8 +749,8 @@ async function loadFieldValueForSubject(subject, legacySubject, fieldName, field
   const variable = sparqlVariableName(fieldName, field);
   const result = await runSparqlQuery(`${PREFIXES}
     SELECT ?${variable} WHERE {
-      ${field.predicate ? `OPTIONAL { ${subject} ${field.predicate} ?${variable}Grouped . }` : ""}
-      ${legacySubject && field.predicate ? `OPTIONAL { ${legacySubject} ${field.predicate} ?${variable}Legacy . }` : ""}
+      ${field.predicate ? `OPTIONAL { ${sparqlTerm(subject)} ${sparqlTerm(field.predicate)} ?${variable}Grouped . }` : ""}
+      ${legacySubject && field.predicate ? `OPTIONAL { ${sparqlTerm(legacySubject)} ${sparqlTerm(field.predicate)} ?${variable}Legacy . }` : ""}
       ${legacySubject ? `BIND(COALESCE(?${variable}Grouped, ?${variable}Legacy) AS ?${variable})` : `BIND(?${variable}Grouped AS ?${variable})`}
     }
   `);
@@ -768,7 +776,7 @@ async function loadGroupSubjects(parentSubject, groupName, group) {
   if (!group.predicate) return [nestedGroupUri(parentSubject, groupName)];
   const result = await runSparqlQuery(`${PREFIXES}
     SELECT ?groupSubject WHERE {
-      ${parentSubject} ${group.predicate} ?groupSubject .
+      ${sparqlTerm(parentSubject)} ${sparqlTerm(group.predicate)} ?groupSubject .
     }
   `);
   const subjects = result.results.bindings
@@ -785,7 +793,7 @@ async function loadLinkedGroupId(group, groupSubject) {
   if (idField?.predicate) {
     const result = await runSparqlQuery(`${PREFIXES}
       SELECT ?id WHERE {
-        ${groupSubject} ${idField.predicate} ?id .
+        ${sparqlTerm(groupSubject)} ${sparqlTerm(idField.predicate)} ?id .
       }
       LIMIT 1
     `);
@@ -811,7 +819,7 @@ async function loadGroupValueForSubject(parentSubject, groupName, group) {
     if (fieldHasInputValue(groupData)) groupValues.push(groupData);
   }
 
-  return group.allowMultiple ? groupValues : (groupValues[0] || null);
+  return groupFieldAllowsMultiple(group) ? groupValues : (groupValues[0] || null);
 }
 
 async function loadFieldsForSubject(subject, fields = {}, legacySubject = null) {
@@ -843,7 +851,7 @@ async function loadReportItemCollections(item) {
 
   for (const [fieldName, field] of Object.entries(RDF.reportItem.fields || {}).filter(([, field]) => isArrayField(field) && !field.options)) {
     const variable = sparqlVariableName(fieldName, field);
-    const pattern = `${subject} ${field.predicate} ?${variable} .`;
+    const pattern = `${sparqlTerm(subject)} ${sparqlTerm(field.predicate)} ?${variable} .`;
     const result = await runSparqlQuery(`${PREFIXES}
       SELECT ?${variable} WHERE {
         ${pattern}
@@ -859,53 +867,8 @@ async function loadReportItemCollections(item) {
   for (const [fieldName, field] of Object.entries(RDF.reportItem.fields || {})) {
     if (!field.options || !item[fieldName]) continue;
 
-    const selectedOption = optionKeyFromStoredValue(field, item[fieldName]);
-    const option = field.options[selectedOption];
-    const subfields = Object.entries(option?.fields || {});
-    if (subfields.length === 0) {
-      item[fieldName] = { selectedOption, values: {} };
-      continue;
-    }
-
-    const seenOptionPredicates = new Set();
-    const safeSubfields = subfields.filter(([, subfield]) => {
-      if (!subfield?.predicate) return false;
-      if (seenOptionPredicates.has(subfield.predicate)) return false;
-      seenOptionPredicates.add(subfield.predicate);
-      return true;
-    });
-    const optionalPatterns = safeSubfields
-      .map(([subfieldName, subfield]) => {
-        const variable = sparqlVariableName(subfieldName, subfield);
-        const pattern = `${subject} ${subfield.predicate} ?${variable} .`;
-        return `OPTIONAL { ${pattern} }`;
-      })
-      .join("\n");
-    const variables = safeSubfields.map(([subfieldName, subfield]) => `?${sparqlVariableName(subfieldName, subfield)}`).join(" ");
-    const optionResult = await runSparqlQuery(`${PREFIXES}
-      SELECT ${variables} WHERE {
-        ${optionalPatterns}
-      }
-    `);
-    const binding = optionResult.results.bindings[0] || {};
-    item[fieldName] = {
-      selectedOption,
-      values: Object.fromEntries(
-        subfields.map(([subfieldName, subfield]) => {
-          const variable = sparqlVariableName(subfieldName, subfield);
-          if (!safeSubfields.some(([safeName]) => safeName === subfieldName)) {
-            return [subfieldName, undefined];
-          }
-          if (subfield.allowMultiple || subfield.inputType === "uri-list" || subfield.inputType === "text-list") {
-            const values = optionResult.results.bindings
-              .map(resultBinding => resultBinding[variable]?.value)
-              .filter(Boolean);
-            return [subfieldName, values];
-          }
-          return [subfieldName, binding[variable]?.value];
-        })
-      ),
-    };
+    const conditionalValue = await loadConditionalFieldForSubject(subject, null, fieldName, field);
+    if (conditionalValue) item[fieldName] = conditionalValue;
   }
 
   return item;
@@ -989,7 +952,7 @@ function mergeEntityBindingData(target, fields, binding) {
   for (const [fieldName, value] of Object.entries(values)) {
     if (value === undefined || value === null) continue;
     const field = fields[fieldName];
-    if (isArrayField(field)) {
+    if (isArrayField(field) || field?.inputType === "import-class" || field?.resourceMode === "per-instance") {
       const currentValues = Array.isArray(target[fieldName])
         ? target[fieldName]
         : (target[fieldName] ? [target[fieldName]] : []);
@@ -1013,16 +976,16 @@ async function loadEntityGroupFields(entityType, entityData) {
     const optionalPatterns = subfields.map(([fieldName, field]) => {
       const variable = sparqlVariableName(fieldName, field);
       return `
-        OPTIONAL { ?${groupSubjectVariable} ${field.predicate} ?${variable}Grouped . }
-        OPTIONAL { ${subject} ${field.predicate} ?${variable}Direct . }
+        OPTIONAL { ?${groupSubjectVariable} ${sparqlTerm(field.predicate)} ?${variable}Grouped . }
+        OPTIONAL { ${sparqlTerm(subject)} ${sparqlTerm(field.predicate)} ?${variable}Direct . }
         BIND(COALESCE(?${variable}Grouped, ?${variable}Direct) AS ?${variable})
       `;
     }).join("\n");
 
     const result = await runSparqlQuery(`${PREFIXES}
       SELECT ${variables.map(variable => `?${variable}`).join(" ")} WHERE {
-        ${group.predicate ? `OPTIONAL { ${subject} ${group.predicate} ?${groupSubjectVariable}Linked . }` : ""}
-        BIND(COALESCE(?${groupSubjectVariable}Linked, ${subject}) AS ?${groupSubjectVariable})
+        ${group.predicate ? `OPTIONAL { ${sparqlTerm(subject)} ${sparqlTerm(group.predicate)} ?${groupSubjectVariable}Linked . }` : ""}
+        BIND(COALESCE(?${groupSubjectVariable}Linked, ${sparqlTerm(subject)}) AS ?${groupSubjectVariable})
         ${optionalPatterns}
       }
     `);
@@ -1067,14 +1030,14 @@ async function rdfEntitiesForType(entityType, organisationId, context, paginatio
     WHERE {
       {
         SELECT ?entity WHERE {
-          ?entity rdf:type ${RDF.classes[entityType]} .
+          ?entity rdf:type ${sparqlTerm(RDF.classes[entityType])} .
         }
-        ORDER BY STR(?entity)
+        ORDER BY DESC(STR(?entity))
         ${paginationClause(pagination)}
       }
       ${fieldPatterns("?entity", fields)}
     }
-    ORDER BY STR(?entity)
+    ORDER BY DESC(STR(?entity))
   `;
 
   const result = await runSparqlQuery(sparqlQuery);
@@ -1109,7 +1072,7 @@ async function rdfEntityCountForType(entityType, organisationId, context) {
     const result = await runSparqlQuery(`${PREFIXES}
       SELECT (COUNT(DISTINCT ?entity) AS ?count)
       WHERE {
-        ?entity rdf:type ${RDF.classes[entityType]} .
+        ?entity rdf:type ${sparqlTerm(RDF.classes[entityType])} .
       }
     `);
     return parseInt(result.results.bindings[0]?.count?.value || "0", 10);
@@ -1188,7 +1151,7 @@ async function withOrganisationRepository(organisationId, callback) {
 
 async function applyOrganisationRdfStructure(organisationId) {
   const structureJson = await organisationRdfStructureJson(organisationId);
-  applyRdfStructureFromJson(structureJson || JSON.stringify(defaultRdfStructure()));
+  applyRdfStructureFromJson(structureJson || JSON.stringify(organisationId ? legacyDefaultRdfStructure() : defaultRdfStructure()));
 }
 
 async function deleteAppOrganisationMetadata(organisationId) {
@@ -1425,9 +1388,18 @@ function migrationPredicatePairs(oldStructure, nextStructure, entityType) {
 }
 
 function deletedPredicateFields(oldStructure, nextStructure, entityType) {
-  const nextFieldNames = new Set(allPredicateFields(nextStructure, entityType).map(field => field.name));
+  const nextFields = allPredicateFields(nextStructure, entityType);
+  const nextFieldNames = new Set(nextFields.map(field => field.name));
+  // Imported classes and conditional options can share predicates. If a field
+  // path changes during structure refresh, keep triples while the predicate is
+  // still represented anywhere on the entity.
+  const nextPredicates = new Set(nextFields.map(field => field.predicate).filter(Boolean));
   return allPredicateFields(oldStructure, entityType)
-    .filter(oldField => oldField.predicate && !nextFieldNames.has(oldField.name));
+    .filter(oldField => (
+      oldField.predicate
+      && !nextFieldNames.has(oldField.name)
+      && !nextPredicates.has(oldField.predicate)
+    ));
 }
 
 function changedClasses(oldStructure, nextStructure) {
@@ -1453,6 +1425,80 @@ function changedUriPrefixes(oldStructure, nextStructure) {
       nextBase: entityIdReplacePatternForStructure(nextStructure, entityType),
     }))
     .filter(change => change.oldBase && change.nextBase && change.oldBase !== change.nextBase);
+}
+
+function migrationStructureFor(oldStructure) {
+  const nextStructure = JSON.parse(JSON.stringify(oldStructure));
+  const defaultStructure = defaultRdfStructure();
+  nextStructure.prefixes = { ...(nextStructure.prefixes || {}), id: defaultStructure.prefixes.id };
+  nextStructure.uriTemplates = Object.fromEntries(
+    Object.entries(nextStructure.uriTemplates || {}).map(([entityType, template]) => {
+      const targetTemplate = String(template).replace(/^resource:/, "id:");
+      return [entityType, String(template).startsWith("resource:") ? targetTemplate : template];
+    })
+  );
+  const migrateFields = fields => Object.fromEntries(
+    Object.entries(fields || {}).map(([fieldName, field]) => {
+      if (!field || typeof field !== "object") return [fieldName, field];
+      const nestedFields = groupSubfieldEntries(field);
+      const nextField = {
+        ...field,
+        ...(field.predicate && String(field.predicate).startsWith("hds:")
+          ? { predicate: String(field.predicate).replace(/^hds:/, "sitrep:") }
+          : {}),
+        ...(field.targetTemplate && String(field.targetTemplate).startsWith("resource:")
+          ? { targetTemplate: String(field.targetTemplate).replace(/^resource:/, "id:") }
+          : {}),
+      };
+      if (nestedFields.length > 0) Object.assign(nextField, migrateFields(Object.fromEntries(nestedFields)));
+      if (field.options) {
+        nextField.options = Object.fromEntries(Object.entries(field.options).map(([optionName, option]) => [
+          optionName,
+          { ...option, fields: migrateFields(option.fields || {}) },
+        ]));
+      }
+      return [fieldName, nextField];
+    })
+  );
+  Object.keys(nextStructure).forEach(entityType => {
+    if (nextStructure[entityType]?.fields) nextStructure[entityType].fields = migrateFields(nextStructure[entityType].fields);
+  });
+  return nextStructure;
+}
+
+async function countUriPrefixTriples(base) {
+  if (!base) return 0;
+  const result = await runSparqlQuery(`${PREFIXES}
+    SELECT (COUNT(*) AS ?count) WHERE {
+      { ?subject ?predicate ?object . FILTER(isIRI(?subject) && STRSTARTS(STR(?subject), "${escapeSparqlString(base)}")) }
+      UNION
+      { ?subject ?predicate ?object . FILTER(isIRI(?object) && STRSTARTS(STR(?object), "${escapeSparqlString(base)}")) }
+    }
+  `);
+  return parseInt(result.results.bindings[0]?.count?.value || "0", 10);
+}
+
+async function organisationUriMigrationStatus(organisationId) {
+  const oldStructureJson = await organisationRdfStructureJson(organisationId);
+  const oldStructure = oldStructureJson ? parseRdfStructureJson(oldStructureJson) : legacyDefaultRdfStructure();
+  const nextStructure = migrationStructureFor(oldStructure);
+  const changes = changedUriPrefixes(oldStructure, nextStructure);
+  const predicateChanges = migrationPredicatePairs(oldStructure, nextStructure, "reportItem")
+    .concat(migrationPredicatePairs(oldStructure, nextStructure, "report"))
+    .concat(entityTypesFromStructure(nextStructure).flatMap(entityType => migrationPredicatePairs(oldStructure, nextStructure, entityType)))
+    .filter((change, index, all) => all.findIndex(candidate => candidate.oldPredicate === change.oldPredicate && candidate.nextPredicate === change.nextPredicate) === index);
+  const uriCounts = await Promise.all(changes.map(({ oldBase }) => countUriPrefixTriples(oldBase)));
+  const predicateCounts = await Promise.all(predicateChanges.map(({ oldPredicate }) => countPredicateTriples(oldPredicate)));
+  const affectedTriples = uriCounts.concat(predicateCounts)
+    .reduce((total, count) => total + count, 0);
+  return {
+    organisationId,
+    needsMigration: changes.length > 0,
+    currentTemplates: changes.map(({ oldBase }) => oldBase),
+    targetTemplates: changes.map(({ nextBase }) => nextBase),
+    predicateChanges: predicateChanges.map(({ oldPredicate, nextPredicate }) => `${oldPredicate} -> ${nextPredicate}`),
+    affectedTriples,
+  };
 }
 
 function termKind(field = {}) {
@@ -1998,6 +2044,14 @@ const resolvers = {
       return listOrganisationRdfStructurePresets(organisationId);
     },
 
+    rdfUriMigrationStatus: async (_, { organisationId }, context) => {
+      requireAdmin(context);
+      return withOrganisationRepository(organisationId, async () => {
+        await applyOrganisationRdfStructure(organisationId);
+        return organisationUriMigrationStatus(organisationId);
+      });
+    },
+
     rdfEntities: async (_, { entityType, organisationId, limit, offset }, context) => rdfEntitiesForType(entityType, organisationId, context, { limit, offset }),
 
     rdfEntityCount: async (_, { entityType, organisationId }, context) => rdfEntityCountForType(entityType, organisationId, context),
@@ -2289,6 +2343,19 @@ const resolvers = {
       parseRdfStructureJson(json, { strict: true });
       return withOrganisationRepository(organisationId, async () => {
       return updateActiveRdfStructure(organisationId, json);
+      });
+    },
+
+    migrateOrganisationUris: async (_, { organisationId }, context) => {
+      requireAdmin(context);
+      return withOrganisationRepository(organisationId, async () => {
+        const oldStructureJson = await organisationRdfStructureJson(organisationId);
+        const oldStructure = oldStructureJson ? parseRdfStructureJson(oldStructureJson) : legacyDefaultRdfStructure();
+        const nextStructure = migrationStructureFor(oldStructure);
+        await migrateStoredRdf(oldStructure, nextStructure);
+        applyRdfStructureFromJson(JSON.stringify(nextStructure));
+        await updateOrganisationRdfStructureJson(organisationId, JSON.stringify(nextStructure));
+        return organisationUriMigrationStatus(organisationId);
       });
     },
 

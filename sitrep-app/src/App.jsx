@@ -1,17 +1,19 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route, NavLink } from 'react-router-dom';
-import Home from './pages/Home';
-import DataInput from './pages/DataInput';
-import Items from './pages/Items';
-import Reports from './pages/Reports';
-import RdfStructure from './pages/RdfStructure';
-import Account from './pages/Account';
-import Organisation from './pages/Organisation';
-import About from './pages/About';
-import Login from './pages/Login';
-import SignUp from './pages/SignUp';
 import ProtectedRoute from './auth/ProtectedRoute.jsx';
 import { useAuth } from './auth/useAuth.js';
 import './App.css';
+
+const Home = lazy(() => import('./pages/Home'));
+const DataInput = lazy(() => import('./pages/DataInput'));
+const Items = lazy(() => import('./pages/Items'));
+const Reports = lazy(() => import('./pages/Reports'));
+const RdfStructure = lazy(() => import('./pages/RdfStructure'));
+const Account = lazy(() => import('./pages/Account'));
+const Organisation = lazy(() => import('./pages/Organisation'));
+const About = lazy(() => import('./pages/About'));
+const Login = lazy(() => import('./pages/Login'));
+const SignUp = lazy(() => import('./pages/SignUp'));
 
 function App() {
   const { user, signOut } = useAuth();
@@ -41,22 +43,24 @@ function App() {
         </nav>
       </header>
 
-      <Routes>
-        {/* Public routes can be visited before the session check completes. */}
-        <Route path="/" element={<Home />} />
-        <Route path="/about" element={<About />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/signup" element={<SignUp />} />
-        {/* ProtectedRoute gates all data-management surfaces behind sign-in. */}
-        <Route element={<ProtectedRoute />}>
-          <Route path="/data-input" element={<DataInput />} />
-          <Route path="/items" element={<Items />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/rdf-structure" element={<RdfStructure />} />
-          <Route path="/account" element={<Account />} />
-          <Route path="/organisation" element={<Organisation />} />
-        </Route>
-      </Routes>
+      <Suspense fallback={<main className="page"><p>Loading...</p></main>}>
+        <Routes>
+          {/* Public routes can be visited before the session check completes. */}
+          <Route path="/" element={<Home />} />
+          <Route path="/about" element={<About />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<SignUp />} />
+          {/* ProtectedRoute gates all data-management surfaces behind sign-in. */}
+          <Route element={<ProtectedRoute />}>
+            <Route path="/data-input" element={<DataInput />} />
+            <Route path="/items" element={<Items />} />
+            <Route path="/reports" element={<Reports />} />
+            <Route path="/rdf-structure" element={<RdfStructure />} />
+            <Route path="/account" element={<Account />} />
+            <Route path="/organisation" element={<Organisation />} />
+          </Route>
+        </Routes>
+      </Suspense>
     </div>
   );
 }

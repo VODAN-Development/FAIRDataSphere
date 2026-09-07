@@ -4,8 +4,58 @@ function isGroupField(field) {
   return field.kind === 'group' || field.kind === 'location' || field.kind === 'importClass';
 }
 
+function isRepeatedField(field) {
+  if (!field || typeof field !== 'object') return false;
+  if (field.allowMultiple) return true;
+  return false;
+}
+
 function isListField(field) {
   return field.allowMultiple || field.inputType === 'uri-list' || field.inputType === 'text-list';
+}
+
+function isUriField(field) {
+  return field?.inputType === 'uri' || field?.inputType === 'uri-list';
+}
+
+function compactUriValue(value) {
+  if (value === null || value === undefined || value === '') return value;
+  if (Array.isArray(value)) return value.map(compactUriValue);
+  if (typeof value !== 'string') return value;
+  const text = value.trim().replace(/^<|>$/g, '');
+  const iriMatch = text.match(/^(https?:\/\/.*[#/])([^#/]+)\/?$/i);
+  if (iriMatch) return decodeURIComponent(iriMatch[2]).replace(/_/g, ' ');
+  const prefixedMatch = text.match(/^([A-Za-z][\w-]*:)([^:/#]+)$/);
+  return prefixedMatch ? prefixedMatch[2].replace(/_/g, ' ') : value;
+}
+
+function expandEditedUriValue(originalValue, editedValue) {
+  if (editedValue === null || editedValue === undefined || editedValue === '') return editedValue;
+  if (Array.isArray(editedValue)) {
+    const originals = Array.isArray(originalValue) ? originalValue : [];
+    return editedValue.map((value, index) => expandEditedUriValue(originals[index], value));
+  }
+  if (typeof editedValue !== 'string') return editedValue;
+  const editedText = editedValue.trim();
+  if (!editedText || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(editedText) || /^<https?:\/\//i.test(editedText)) {
+    return editedValue;
+  }
+
+  const originalText = typeof originalValue === 'string' ? originalValue.trim().replace(/^<|>$/g, '') : '';
+  const iriMatch = originalText.match(/^(https?:\/\/.*[#/])([^#/]+)(\/?)$/i);
+  if (iriMatch) return `${iriMatch[1]}${encodeURIComponent(editedText.replace(/\s+/g, '_'))}${iriMatch[3]}`;
+  const prefixedMatch = originalText.match(/^([A-Za-z][\w-]*:)([^:/#]+)$/);
+  if (prefixedMatch) return `${prefixedMatch[1]}${editedText.replace(/\s+/g, '_')}`;
+  return editedValue;
+}
+
+function parseStoredValue(field) {
+  if (!field?.value) return null;
+  try {
+    return typeof field.value === 'string' ? JSON.parse(field.value) : field.value;
+  } catch {
+    return field.value;
+  }
 }
 
 function emptyGroupValueFor(field) {
@@ -31,43 +81,83 @@ function groupHasValue(groupValue) {
   return valueHasContent(groupValue);
 }
 
-function serializeGroupValue(field, value) {
-  // Convert nested React state into compact payloads, dropping empty repeated
-  // groups and empty list entries before sending them to GraphQL.
-  const serializeSingleGroupValue = (groupValue = {}) => Object.fromEntries(
+function normalizeGroupValueForEdit(field, value) {
+  const normalizeSingleGroupValue = (groupValue = {}) => Object.fromEntries(
     Object.entries(groupValue).map(([name, subfieldValue]) => {
       const subfield = (field.subfields || []).find(candidate => candidate.name === name);
-      if (isGroupField(subfield || {})) return [name, serializeGroupValue(subfield, subfieldValue)];
-      if (subfield?.kind === 'conditional') return [name, serializeConditionalValue(subfield, subfieldValue)];
+      if (isGroupField(subfield || {})) return [name, normalizeGroupValueForEdit(subfield, subfieldValue)];
+      if (subfield?.kind === 'conditional') return [name, normalizeConditionalValueForEdit(subfield, subfieldValue)];
+      if (isUriField(subfield)) return [name, compactUriValue(subfieldValue)];
+      if (isListField(subfield || {})) return [name, subfieldValue || ['']];
+      return [name, subfieldValue];
+    })
+  );
+
+  if (isRepeatedField(field)) {
+    return Array.isArray(value) && value.length
+      ? value.map(normalizeSingleGroupValue)
+      : [emptyGroupValueFor(field)];
+  }
+  return value ? normalizeSingleGroupValue(value) : emptyGroupValueFor(field);
+}
+
+function normalizeConditionalValueForEdit(field, value) {
+  const conditionalValue = value || { selectedOption: '', values: {} };
+  const selectedOption = (field.options || []).find(option => option.name === conditionalValue.selectedOption);
+  const values = Object.fromEntries(
+    Object.entries(conditionalValue.values || {}).map(([name, subfieldValue]) => {
+      const subfield = (selectedOption?.subfields || []).find(candidate => candidate.name === name);
+      if (isGroupField(subfield || {})) return [name, normalizeGroupValueForEdit(subfield, subfieldValue)];
+      if (subfield?.kind === 'conditional') return [name, normalizeConditionalValueForEdit(subfield, subfieldValue)];
+      if (isUriField(subfield)) return [name, compactUriValue(subfieldValue)];
+      if (isListField(subfield || {})) return [name, subfieldValue || ['']];
+      return [name, subfieldValue];
+    })
+  );
+  return { ...conditionalValue, values };
+}
+
+function serializeGroupValue(field, value, originalValue = parseStoredValue(field)) {
+  // Convert nested React state into compact payloads, dropping empty repeated
+  // groups and empty list entries before sending them to GraphQL.
+  const serializeSingleGroupValue = (groupValue = {}, originalGroupValue = {}) => Object.fromEntries(
+    Object.entries(groupValue).map(([name, subfieldValue]) => {
+      const subfield = (field.subfields || []).find(candidate => candidate.name === name);
+      if (isGroupField(subfield || {})) return [name, serializeGroupValue(subfield, subfieldValue, originalGroupValue?.[name])];
+      if (subfield?.kind === 'conditional') return [name, serializeConditionalValue(subfield, subfieldValue, originalGroupValue?.[name])];
+      if (isUriField(subfield)) return [name, expandEditedUriValue(originalGroupValue?.[name], isListField(subfield) ? (subfieldValue || []).filter(Boolean) : subfieldValue)];
       if (isListField(subfield || {})) return [name, (subfieldValue || []).filter(Boolean)];
       return [name, subfieldValue];
     })
   );
 
-  if (field.allowMultiple) {
-    const values = (Array.isArray(value) ? value : []).map(serializeSingleGroupValue).filter(groupHasValue);
+  if (isRepeatedField(field)) {
+    const originalGroups = Array.isArray(originalValue) ? originalValue : [];
+    const values = (Array.isArray(value) ? value : [])
+      .map((groupValue, index) => serializeSingleGroupValue(groupValue, originalGroups[index]))
+      .filter(groupHasValue);
     return values.length ? values : null;
   }
 
-  const values = serializeSingleGroupValue(value || {});
+  const values = serializeSingleGroupValue(value || {}, originalValue || {});
   return groupHasValue(values) ? values : null;
 }
 
-function serializeConditionalValue(field, value) {
+function serializeConditionalValue(field, value, originalValue = parseStoredValue(field)) {
   // Conditional fields save the selected option plus only the subfield values for
   // that option.
   const conditionalValue = value || {};
+  const originalConditionalValue = originalValue || {};
   const selectedOption = (field.options || []).find(option => option.name === conditionalValue.selectedOption);
   const values = Object.fromEntries(
     Object.entries(conditionalValue.values || {}).map(([name, subfieldValue]) => {
       const subfield = (selectedOption?.subfields || []).find(candidate => candidate.name === name);
       if (isGroupField(subfield || {})) {
-        return [name, serializeGroupValue(subfield, subfieldValue)];
+        return [name, serializeGroupValue(subfield, subfieldValue, originalConditionalValue.values?.[name])];
       }
-      if (subfield?.kind === 'conditional') return [name, serializeConditionalValue(subfield, subfieldValue)];
-      if (isListField(subfield || {})) {
-        return [name, (subfieldValue || []).filter(Boolean)];
-      }
+      if (subfield?.kind === 'conditional') return [name, serializeConditionalValue(subfield, subfieldValue, originalConditionalValue.values?.[name])];
+      if (isUriField(subfield)) return [name, expandEditedUriValue(originalConditionalValue.values?.[name], isListField(subfield) ? (subfieldValue || []).filter(Boolean) : subfieldValue)];
+      if (isListField(subfield || {})) return [name, (subfieldValue || []).filter(Boolean)];
       return [name, subfieldValue];
     })
   );
@@ -77,7 +167,7 @@ function serializeConditionalValue(field, value) {
 export function emptyValueFor(field) {
   if (field.kind === 'array') return [''];
   if (isGroupField(field)) {
-    return field.allowMultiple ? [emptyGroupValueFor(field)] : emptyGroupValueFor(field);
+    return isRepeatedField(field) ? [emptyGroupValueFor(field)] : emptyGroupValueFor(field);
   }
   if (field.kind === 'conditional') return { selectedOption: '', values: {} };
   return '';
@@ -89,21 +179,28 @@ export function parseValueForEdit(field) {
   if (!field.value) return emptyValueFor(field);
   if (field.kind === 'array' || field.kind === 'group' || field.kind === 'location' || field.kind === 'importClass' || field.kind === 'conditional') {
     try {
-      const value = JSON.parse(field.value);
-      if (field.kind === 'array') return Array.isArray(value) && value.length ? value : [''];
-      if (isGroupField(field) && field.allowMultiple) return Array.isArray(value) && value.length ? value : [emptyGroupValueFor(field)];
+      const value = typeof field.value === 'string' ? JSON.parse(field.value) : field.value;
+      if (field.kind === 'array') {
+        const values = Array.isArray(value) && value.length ? value : [''];
+        return isUriField(field) ? compactUriValue(values) : values;
+      }
+      if (isGroupField(field)) return normalizeGroupValueForEdit(field, value);
+      if (field.kind === 'conditional') return normalizeConditionalValueForEdit(field, value);
       return value || emptyValueFor(field);
     } catch {
-      return field.kind === 'array' ? [field.value] : emptyValueFor(field);
+      return field.kind === 'array' ? [isUriField(field) ? compactUriValue(field.value) : field.value] : emptyValueFor(field);
     }
   }
-  return field.value;
+  return isUriField(field) ? compactUriValue(field.value) : field.value;
 }
 
 export function serializeValue(field, value) {
   // GraphQL expects strings, so arrays/groups/conditionals are JSON-encoded and
   // empty scalar values become null.
-  if (field.kind === 'array') return JSON.stringify((value || []).filter(Boolean));
+  if (field.kind === 'array') {
+    const values = (value || []).filter(Boolean);
+    return JSON.stringify(isUriField(field) ? expandEditedUriValue(parseStoredValue(field), values) : values);
+  }
   if (isGroupField(field)) {
     const values = serializeGroupValue(field, value);
     return values ? JSON.stringify(values) : null;
@@ -112,7 +209,8 @@ export function serializeValue(field, value) {
     const values = serializeConditionalValue(field, value);
     return values ? JSON.stringify(values) : null;
   }
-  return value || null;
+  const nextValue = isUriField(field) ? expandEditedUriValue(field.value, value) : value;
+  return nextValue || null;
 }
 
 export function formValuesFromFields(fields) {

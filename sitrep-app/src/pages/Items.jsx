@@ -180,6 +180,37 @@ function entityTitle(entity) {
 const PAGE_SIZE_OPTIONS = [25, 50, 100];
 const DEFAULT_PAGE_SIZE = 25;
 
+function sortValueText(value) {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function isMatchingSearchText(item, query) {
+  if (!query) return true;
+  const haystack = [
+    itemTitle(item),
+    item.uri,
+    ...(item.fieldValues || []).map(field => [field.label, field.name, displayValue(field)].filter(Boolean).join(' ')),
+  ].filter(Boolean).join(' ').toLowerCase();
+  return haystack.includes(query);
+}
+
+function isMatchingEntitySearchText(entity, query) {
+  if (!query) return true;
+  const haystack = [
+    entityTitle(entity),
+    entity.uri,
+    ...(entity.fieldValues || []).map(field => [field.label, field.name, displayValue(field)].filter(Boolean).join(' ')),
+  ].filter(Boolean).join(' ').toLowerCase();
+  return haystack.includes(query);
+}
+
+function compareSortValues(left, right, direction) {
+  const leftText = sortValueText(left);
+  const rightText = sortValueText(right);
+  if (leftText === rightText) return 0;
+  return leftText.localeCompare(rightText, undefined, { numeric: true, sensitivity: 'base' }) * (direction === 'asc' ? 1 : -1);
+}
+
 function PaginationControls({ pageIndex, pageSize, totalCount, onPageChange, onPageSizeChange, disabled }) {
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const currentPage = Math.min(pageIndex + 1, totalPages);
@@ -245,6 +276,8 @@ export default function Items() {
   const [itemPageIndex, setItemPageIndex] = useState(0);
   const [entityPageIndex, setEntityPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [sortDirection, setSortDirection] = useState('desc');
+  const [searchFilter, setSearchFilter] = useState('');
   const { notice, showNotice, confirmAction, clearNotice } = useFloatyConfirmation();
 
   const reportItemVariables = { organisationId: activeOrganisationId, limit: pageSize, offset: itemPageIndex * pageSize };
@@ -339,6 +372,29 @@ export default function Items() {
   const reports = reportsData?.reports || [];
   const entities = entitiesData?.rdfEntities || [];
   const entityCount = entitiesData?.rdfEntityCount || 0;
+  const normalizedFilter = searchFilter.trim().toLowerCase();
+  const filteredReportItems = useMemo(() => {
+    const nextItems = [...reportItems].filter(item => isMatchingSearchText(item, normalizedFilter));
+    return nextItems.sort((left, right) => {
+      const leftEntry = Number(left.entryNumber || 0);
+      const rightEntry = Number(right.entryNumber || 0);
+      if (Number.isFinite(leftEntry) && Number.isFinite(rightEntry) && leftEntry !== rightEntry) {
+        return (leftEntry - rightEntry) * (sortDirection === 'asc' ? 1 : -1);
+      }
+      return compareSortValues(itemTitle(left), itemTitle(right), sortDirection);
+    });
+  }, [reportItems, normalizedFilter, sortDirection]);
+  const filteredEntities = useMemo(() => {
+    const nextEntities = [...entities].filter(entity => isMatchingEntitySearchText(entity, normalizedFilter));
+    return nextEntities.sort((left, right) => {
+      const leftId = Number.parseInt(String(left.id || left.uri || '').match(/\d+$/)?.[0] || 'NaN', 10);
+      const rightId = Number.parseInt(String(right.id || right.uri || '').match(/\d+$/)?.[0] || 'NaN', 10);
+      if (Number.isFinite(leftId) && Number.isFinite(rightId) && leftId !== rightId) {
+        return (leftId - rightId) * (sortDirection === 'asc' ? 1 : -1);
+      }
+      return compareSortValues(entityTitle(left), entityTitle(right), sortDirection);
+    });
+  }, [entities, normalizedFilter, sortDirection]);
   const loading = structureLoading || itemsLoading || reportsLoading || entitiesLoading;
   const error = actionError || structureError?.message || itemsError?.message || reportsError?.message || entitiesError?.message;
   const reportsAvailableForItem = (item) => reports.filter(report =>
@@ -406,6 +462,7 @@ export default function Items() {
       });
       stopEditing();
       await refetchEntities();
+      await refetchItems();
     } catch (err) {
       const fieldValidation = fieldValidationFromError(err);
       if (fieldValidation) {
@@ -447,12 +504,19 @@ export default function Items() {
   };
 
   const handleDeleteEntity = async (entity) => {
+    const confirmed = await confirmAction(`Delete ${titleForEntity(entity.entityType).toLowerCase()} "${entityTitle(entity)}"? This cannot be undone.`, {
+      confirmLabel: 'Delete instance',
+    });
+    if (!confirmed) return;
+
     try {
       setActionError('');
       await deleteRdfEntity({ variables: { entityType: entity.entityType, id: entity.id, uri: entity.uri, organisationId: activeOrganisationId } });
       await refetchEntities();
+      showNotice(`${titleForEntity(entity.entityType)} deleted.`);
     } catch (err) {
       setActionError(err.message);
+      showNotice(`Error deleting ${titleForEntity(entity.entityType).toLowerCase()}: ${err.message}`, 'error');
     }
   };
 
@@ -504,14 +568,31 @@ export default function Items() {
         </aside>
 
         <main className="rdf-field-pane entity-instance-pane">
-          <div className="rdf-field-pane-header">
+          <div className="rdf-field-pane-header" style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
             <h3>{titleForEntity(activeEntityType)} Instances</h3>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span>Sort</span>
+                <select value={sortDirection} onChange={(event) => setSortDirection(event.target.value)} aria-label="Sort direction">
+                  <option value="desc">Descending</option>
+                  <option value="asc">Ascending</option>
+                </select>
+              </label>
+              <input
+                type="search"
+                value={searchFilter}
+                onChange={(event) => setSearchFilter(event.target.value)}
+                placeholder={`Filter ${titleForEntity(activeEntityType).toLowerCase()}...`}
+                aria-label="Filter items"
+                style={{ minWidth: '220px' }}
+              />
+            </div>
           </div>
           {loading && <p>Loading...</p>}
 
           {activeEntityType === 'reportItem' ? (
-            reportItems.length === 0 && !loading ? (
-              <p>No items submitted yet.</p>
+            filteredReportItems.length === 0 && !loading ? (
+              <p>{searchFilter ? 'No matching items found.' : 'No items submitted yet.'}</p>
             ) : (
               <div className="entity-instance-list">
                 <PaginationControls
@@ -522,7 +603,7 @@ export default function Items() {
                   onPageSizeChange={setPageSize}
                   disabled={loading}
                 />
-                {reportItems.map(item => {
+                {filteredReportItems.map(item => {
                   const availableReports = reportsAvailableForItem(item);
                   const itemEditKey = `reportItem:${item.entryNumber}`;
                   const isEditing = editingKey === itemEditKey;
@@ -652,8 +733,8 @@ export default function Items() {
               </div>
             )
           ) : (
-            entities.length === 0 && !loading ? (
-              <p>No {titleForEntity(activeEntityType).toLowerCase()} instances found.</p>
+            filteredEntities.length === 0 && !loading ? (
+              <p>{searchFilter ? `No matching ${titleForEntity(activeEntityType).toLowerCase()} instances found.` : `No ${titleForEntity(activeEntityType).toLowerCase()} instances found.`}</p>
             ) : (
               <div className="entity-instance-list">
                 <PaginationControls
@@ -664,7 +745,7 @@ export default function Items() {
                   onPageSizeChange={setPageSize}
                   disabled={loading}
                 />
-                {entities.map(entity => (
+                {filteredEntities.map(entity => (
                   (() => {
                     const entityEditKey = `${entity.entityType}:${entity.uri}`;
                     const isEditing = editingKey === entityEditKey;

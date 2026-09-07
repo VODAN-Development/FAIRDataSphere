@@ -19,6 +19,7 @@ import {
   encryptJoinPassword,
   encryptRepositoryPassword,
 } from "../services/organisationCredentialEncryption.js";
+import { defaultRdfStructure } from "../rdf/reportRdfConfig.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, "../data");
@@ -572,6 +573,7 @@ export async function createOrganisation(userId, { name, description, joinRequir
   organisation.roles = normalizeOrganisationRoles(organisation);
 
   await writeOrganisations([...organisations, organisation]);
+  await updateOrganisationRdfStructureJson(id, JSON.stringify(defaultRdfStructure()));
   return organisationPayload(organisation, userId);
 }
 
