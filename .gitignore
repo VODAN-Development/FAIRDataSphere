@@ -36,6 +36,7 @@ hck.pub
 *.crt
 *.csr
 *.cert
+*.srl
 *.keystore
 *.jks
 secrets/

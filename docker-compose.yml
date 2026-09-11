@@ -11,6 +11,7 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs/agraph-ca.crt:/etc/caddy/certs/agraph-ca.crt:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -71,11 +72,12 @@ services:
     shm_size: 2g
     volumes:
       - ./allegrograph/agraph.cfg:/agraph/etc/agraph.cfg:rw
+      - ./certs/agraph-server.pem:/agraph/certs/server-cert-and-key.pem:ro
       - allegrograph_data:/agraph/data
     expose:
-      - "10035"
+      - "10036"
     ports:
-      - "127.0.0.1:10035:10035"
+      - "127.0.0.1:10036:10036"
 
   backend:
     # Backend exposes GraphQL, auth cookies, organisation metadata, and SPARQL
@@ -85,8 +87,11 @@ services:
     restart: unless-stopped
     env_file:
       - ${ENV_FILE:-./.env}
+    environment:
+      NODE_EXTRA_CA_CERTS: /app/certs/agraph-ca.crt
     volumes:
       - ./backend-rdf/data:/app/data
+      - ./certs/agraph-ca.crt:/app/certs/agraph-ca.crt:ro
     expose:
       - "4000"
     depends_on:
