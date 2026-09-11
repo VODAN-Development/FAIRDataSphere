@@ -47,7 +47,40 @@ The recommended production-style setup uses Docker Compose from the repository r
 
 2. Fill in the required values in `.env`, especially domain names, AllegroGraph credentials, `AUTH_SECRET`, `FIELD_ENCRYPTION_KEY`, `REPOSITORY_PASSWORD_ENCRYPTION_KEY`, and `JOIN_PASSWORD_ENCRYPTION_KEY`.
 
-3. Start the stack:
+3. Create the private AllegroGraph config from the tracked example:
+
+   ```bash
+   cp allegrograph/agraph.cfg.example allegrograph/agraph.cfg
+   ```
+
+   The real `allegrograph/agraph.cfg` is ignored by Git so deployment-only values, such as the Keycloak OAuth `client-secret`, do not get committed. Add the real `client-secret` to the copied file when the Keycloak client requires one.
+
+4. Generate the internal AllegroGraph TLS files:
+
+   ```bash
+   mkdir -p certs
+
+   openssl genrsa -out certs/agraph-ca.key 4096
+   openssl req -x509 -new -nodes -key certs/agraph-ca.key -sha256 -days 825 -out certs/agraph-ca.crt -subj "/CN=Sitrep AllegroGraph Internal CA"
+
+   openssl genrsa -out certs/agraph-server.key 2048
+   openssl req -new -key certs/agraph-server.key -out certs/agraph-server.csr -subj "/CN=allegrograph"
+   printf "subjectAltName=DNS:allegrograph,DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\nkeyUsage=digitalSignature,keyEncipherment\n" > certs/agraph-server.ext
+   openssl x509 -req -in certs/agraph-server.csr -CA certs/agraph-ca.crt -CAkey certs/agraph-ca.key -CAcreateserial -out certs/agraph-server.crt -days 825 -sha256 -extfile certs/agraph-server.ext
+
+   cat certs/agraph-server.crt certs/agraph-server.key > certs/agraph-server.pem
+   rm certs/agraph-server.csr certs/agraph-server.ext
+   ```
+
+   On Windows with OpenSSL available, you can instead run:
+
+   ```powershell
+   .\scripts\generate-agraph-certs.ps1
+   ```
+
+   The generated certificate files are ignored by Git. Keep `certs/agraph-ca.key` private; it can sign replacement internal certificates.
+
+5. Start the stack:
 
    ```bash
    docker compose up --build
@@ -55,12 +88,20 @@ The recommended production-style setup uses Docker Compose from the repository r
 
 This starts:
 
-- Caddy as the public reverse proxy.
-- AllegroGraph for RDF storage.
+- Caddy as the public reverse proxy for the frontend, backend API, Keycloak, and AllegroGraph WebView domains.
+- AllegroGraph for RDF storage, using HTTPS on port `10036`.
 - The backend GraphQL API on port `4000` internally.
 - The built frontend served by nginx.
 
-The AllegroGraph service mounts `allegrograph/agraph.cfg`. This config keeps repository instances warm for five minutes after their last access with `InstanceTimeout 5m`, then lets AllegroGraph close idle instances and release shared memory. This helps small servers keep many organisation repositories on disk without keeping every repository open in `/dev/shm`.
+The AllegroGraph service mounts the ignored runtime file `allegrograph/agraph.cfg`. The tracked `allegrograph/agraph.cfg.example` disables plain HTTP with `AllowHTTP no`, enables `SSLPort 10036`, and reads the combined server certificate/private-key PEM from `/agraph/certs/server-cert-and-key.pem`. Docker Compose mounts `certs/agraph-server.pem` there. Caddy and the backend both mount `certs/agraph-ca.crt` so they can verify AllegroGraph's internal HTTPS certificate without disabling TLS verification.
+
+The same config keeps repository instances warm for five minutes after their last access with `InstanceTimeout 5m`, then lets AllegroGraph close idle instances and release shared memory. This helps small servers keep many organisation repositories on disk without keeping every repository open in `/dev/shm`.
+
+When changing AllegroGraph, Caddy, certificate, or environment settings, recreate the affected services so mounted files and environment variables are refreshed:
+
+```bash
+docker compose up -d --force-recreate allegrograph backend caddy
+```
 
 ### Local Development
 
@@ -115,6 +156,20 @@ Admins can also work without a selected organisation to manage global structures
 Each organisation normally receives its own AllegroGraph repository during creation. If AllegroGraph cannot create the repository because shared memory is full, the organisation is still created in a pending state. Members can still join the organisation, owners can edit its profile, roles can be managed, and file-backed features such as compiled report settings remain available where they do not need RDF data.
 
 Pending organisations cannot use RDF-backed pages such as Data Input, Items, Reports, or RDF entity browsing until the repository is provisioned. Owners and admins can open Organisation, select the pending workspace, and use **Try creating repository** after idle repositories have closed or memory has been freed.
+
+### AllegroGraph HTTPS and Keycloak OAuth
+
+AllegroGraph is intended to run behind Caddy but still speak HTTPS inside the Compose network. Public browsers connect to the AllegroGraph domain through Caddy, and Caddy proxies to `https://allegrograph:10036`. The backend also uses `ALLEGRO_BASE_URL=https://allegrograph:10036`.
+
+Keycloak should only need HTTPS redirect URIs for AllegroGraph WebView. If Keycloak reports an HTTP redirect URI, check that the server has been recreated with the current `allegrograph/agraph.cfg`, `Caddyfile`, `.env`, and `docker-compose.yml` settings.
+
+If Caddy fails with an error such as `failed reading ca cert: read /etc/caddy/certs/agraph-ca.crt: is a directory`, Docker previously created a directory because the cert file did not exist at container creation time. Remove the bad directory, regenerate the cert files, and recreate the services:
+
+```bash
+rm -rf certs/agraph-ca.crt certs/agraph-server.pem
+# Regenerate certs, then:
+docker compose up -d --force-recreate allegrograph backend caddy
+```
 
 ## FAQ
 
