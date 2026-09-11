@@ -42,6 +42,7 @@ hck.pub
 secrets/
 credentials/
 ssh/
+allegrograph/agraph.cfg
 
 # Runtime app data
 backend-rdf/data/*.json
