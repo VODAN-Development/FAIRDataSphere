@@ -152,12 +152,13 @@ export async function runSparqlQuery(query) {
 
 export async function runSparqlUpdate(update) {
   const config = activeRepositoryConfig();
-  // Updates cover INSERT/DELETE operations and return plain text diagnostics.
+  // AllegroGraph's SPARQL update endpoint may negotiate HTML responses for
+  // successful updates, so accept both HTML and plain-text diagnostics.
   const response = await fetch(repositoryUrl(config.repository), {
     method: "POST",
     headers: {
       "Content-Type": "application/sparql-update",
-      "Accept": "text/plain",
+      "Accept": "text/html, text/plain;q=0.9, */*;q=0.1",
       "Authorization": basicAuth(config.username, config.password),
     },
     body: update,
