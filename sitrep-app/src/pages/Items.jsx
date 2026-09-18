@@ -50,6 +50,8 @@ const RDF_FIELD_VALUE_FIELDS = gql`
     inputType
     allowMultiple
     encrypted
+    warning
+    backupValue
     subfields {
       ...RdfFieldValueLevel2
     }
@@ -137,6 +139,12 @@ const UPDATE_REPORT_ITEM = gql`
   mutation UpdateReportItemFromFields($id: ID!, $fieldValues: [RdfFieldValueInput!]!, $organisationId: ID) {
     updateReportItemFromFields(id: $id, fieldValues: $fieldValues, organisationId: $organisationId) {
       entryNumber
+      fieldValues {
+        name
+        label
+        warning
+        backupValue
+      }
     }
   }
 `;
@@ -146,6 +154,12 @@ const UPDATE_RDF_ENTITY = gql`
     updateRdfEntity(entityType: $entityType, id: $id, uri: $uri, fieldValues: $fieldValues, organisationId: $organisationId) {
       id
       uri
+      fieldValues {
+        name
+        label
+        warning
+        backupValue
+      }
     }
   }
 `;
@@ -209,6 +223,13 @@ function compareSortValues(left, right, direction) {
   const rightText = sortValueText(right);
   if (leftText === rightText) return 0;
   return leftText.localeCompare(rightText, undefined, { numeric: true, sensitivity: 'base' }) * (direction === 'asc' ? 1 : -1);
+}
+
+function blankedFieldNotice(fieldValues = []) {
+  const blankedFields = (fieldValues || []).filter(field => field.warning && field.backupValue);
+  if (!blankedFields.length) return '';
+  const labels = blankedFields.map(field => field.label || field.name).join(', ');
+  return `Some existing values no longer match the current field datatype and were blanked: ${labels}. The original values were saved as backup triples on this item.`;
 }
 
 function PaginationControls({ pageIndex, pageSize, totalCount, onPageChange, onPageSizeChange, disabled }) {
@@ -429,7 +450,7 @@ export default function Items() {
   const handleUpdateReportItem = async (item) => {
     try {
       setActionError('');
-      await updateReportItem({
+      const result = await updateReportItem({
         variables: {
           id: item.entryNumber,
           fieldValues: fieldInputsPayload(item.fieldValues, editValues),
@@ -437,6 +458,8 @@ export default function Items() {
         },
       });
       stopEditing();
+      const noticeMessage = blankedFieldNotice(result.data?.updateReportItemFromFields?.fieldValues);
+      if (noticeMessage) showNotice(noticeMessage);
       notifyReportsUpdated();
     } catch (err) {
       const fieldValidation = fieldValidationFromError(err);
@@ -451,7 +474,7 @@ export default function Items() {
   const handleUpdateEntity = async (entity) => {
     try {
       setActionError('');
-      await updateRdfEntity({
+      const result = await updateRdfEntity({
         variables: {
           entityType: entity.entityType,
           id: entity.id,
@@ -461,6 +484,8 @@ export default function Items() {
         },
       });
       stopEditing();
+      const noticeMessage = blankedFieldNotice(result.data?.updateRdfEntity?.fieldValues);
+      if (noticeMessage) showNotice(noticeMessage);
       await refetchEntities();
       await refetchItems();
     } catch (err) {
@@ -646,10 +671,15 @@ export default function Items() {
                           )}
                           {item.fieldValues.map(field => {
                             const value = displayValue(field);
-                            if (!value) return null;
+                            if (!value && !field.backupValue) return null;
                             return (
                               <div key={field.name} className="event-detail-row">
-                                <strong>{field.label || field.name}:</strong> {value}
+                                <strong>{field.label || field.name}:</strong> {value || ''}
+                                {field.backupValue && (
+                                  <span className="field-backup-note">
+                                    Blanked after datatype change. Backup: {field.backupValue}
+                                  </span>
+                                )}
                               </div>
                             );
                           })}
@@ -804,10 +834,15 @@ export default function Items() {
                             </div>
                             {entity.fieldValues.map(field => {
                               const value = displayValue(field);
-                              if (!value) return null;
+                              if (!value && !field.backupValue) return null;
                               return (
                                 <div key={field.name} className="event-detail-row">
-                                  <strong>{field.label || field.name}:</strong> {value}
+                                  <strong>{field.label || field.name}:</strong> {value || ''}
+                                  {field.backupValue && (
+                                    <span className="field-backup-note">
+                                      Blanked after datatype change. Backup: {field.backupValue}
+                                    </span>
+                                  )}
                                 </div>
                               );
                             })}

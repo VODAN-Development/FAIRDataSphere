@@ -1881,6 +1881,13 @@ nav a button {
   color: var(--color-on-surface-strong);
 }
 
+.field-backup-note {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--color-warning-strong, #8a5a00);
+  font-size: 0.9rem;
+}
+
 .report-item-meta {
   display: flex;
   gap: 1rem;

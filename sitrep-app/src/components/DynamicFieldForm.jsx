@@ -49,6 +49,7 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
   );
 
   const isGroupField = (field) => field.kind === 'group' || field.kind === 'location' || field.kind === 'importClass';
+  const isOptionalImportedClass = (field) => field.inputType === 'import-class' && !field.required;
 
   const editDisplayValue = (value, compactImportedValue) => {
     if (!compactImportedValue || value === null || value === undefined) return value;
@@ -167,6 +168,14 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
     updateValue(field.name, (values[field.name] || []).filter((_, index) => index !== groupIndex));
   };
 
+  const addSingleGroupValue = (field) => {
+    updateValue(field.name, emptyGroupValue(field));
+  };
+
+  const removeSingleGroupValue = (field) => {
+    updateValue(field.name, null);
+  };
+
   const updateConditionalListSubfield = (field, subfieldName, index, value) => {
     const current = values[field.name] || { selectedOption: '', values: {} };
     const currentValues = [...(current.values?.[subfieldName] || [''])];
@@ -273,15 +282,27 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
             <span>{subfield.label || subfield.name}</span>
             {subfield.targetEntityType && <small>{subfield.targetEntityType}</small>}
           </div>
+          {isOptionalImportedClass(subfield) && !subfield.allowMultiple && !groupValue?.[subfield.name] ? (
+            <button
+              type="button"
+              onClick={() => onSubfieldChange(subfield.name, emptyGroupValue(subfield))}
+              className="secondary-btn"
+              disabled={disabled}
+            >
+              + Add {subfield.label || subfield.name}
+            </button>
+          ) : null}
           {(subfield.allowMultiple
-            ? (Array.isArray(groupValue?.[subfield.name]) ? groupValue[subfield.name] : [emptyGroupValue(subfield)])
-            : [groupValue?.[subfield.name] || emptyGroupValue(subfield)]
+            ? (Array.isArray(groupValue?.[subfield.name])
+              ? groupValue[subfield.name]
+              : (isOptionalImportedClass(subfield) ? [] : [emptyGroupValue(subfield)]))
+            : (isOptionalImportedClass(subfield) && !groupValue?.[subfield.name] ? [] : [groupValue?.[subfield.name] || emptyGroupValue(subfield)])
           ).map((nestedGroupValue, nestedGroupIndex) => {
             const setNestedGroupValue = (nextNestedGroupValue) => {
               if (subfield.allowMultiple) {
                 const currentValues = Array.isArray(groupValue?.[subfield.name])
                   ? [...groupValue[subfield.name]]
-                  : [emptyGroupValue(subfield)];
+                  : (isOptionalImportedClass(subfield) ? [] : [emptyGroupValue(subfield)]);
                 currentValues[nestedGroupIndex] = nextNestedGroupValue;
                 onSubfieldChange(subfield.name, currentValues);
                 return;
@@ -290,7 +311,7 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
             };
             return (
               <div key={nestedGroupIndex} className="imported-class-instance">
-                {subfield.allowMultiple && (groupValue?.[subfield.name] || []).length > 1 && (
+                {subfield.inputType === 'import-class' && subfield.allowMultiple && (
                   <button
                     type="button"
                     className="delete-btn"
@@ -298,6 +319,16 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
                       const currentValues = Array.isArray(groupValue?.[subfield.name]) ? groupValue[subfield.name] : [];
                       onSubfieldChange(subfield.name, currentValues.filter((_, index) => index !== nestedGroupIndex));
                     }}
+                    disabled={disabled}
+                  >
+                    Remove
+                  </button>
+                )}
+                {isOptionalImportedClass(subfield) && !subfield.allowMultiple && (
+                  <button
+                    type="button"
+                    className="delete-btn"
+                    onClick={() => onSubfieldChange(subfield.name, null)}
                     disabled={disabled}
                   >
                     Remove
@@ -478,16 +509,36 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
                               <span>{subfield.label || subfield.name}</span>
                               {subfield.targetEntityType && <small>{subfield.targetEntityType}</small>}
                             </div>
+                            {isOptionalImportedClass(subfield) && !subfield.allowMultiple && !values[field.name]?.values?.[subfield.name] ? (
+                              <button
+                                type="button"
+                                onClick={() => updateConditionalSubfield(field, subfield.name, emptyGroupValue(subfield))}
+                                className="secondary-btn"
+                                disabled={disabled}
+                              >
+                                + Add {subfield.label || subfield.name}
+                              </button>
+                            ) : null}
                             {(subfield.allowMultiple
-                              ? (values[field.name]?.values?.[subfield.name] || [emptyGroupValue(subfield)])
-                              : [values[field.name]?.values?.[subfield.name] || emptyGroupValue(subfield)]
+                              ? (values[field.name]?.values?.[subfield.name] || (isOptionalImportedClass(subfield) ? [] : [emptyGroupValue(subfield)]))
+                              : (isOptionalImportedClass(subfield) && !values[field.name]?.values?.[subfield.name] ? [] : [values[field.name]?.values?.[subfield.name] || emptyGroupValue(subfield)])
                             ).map((groupValue, groupIndex) => (
                               <div key={groupIndex} className="imported-class-instance">
-                                {subfield.allowMultiple && (values[field.name]?.values?.[subfield.name] || []).length > 1 && (
+                                {subfield.inputType === 'import-class' && subfield.allowMultiple && (
                                   <button
                                     type="button"
                                     className="delete-btn"
                                     onClick={() => removeConditionalGroupValue(field, subfield, groupIndex)}
+                                    disabled={disabled}
+                                  >
+                                    Remove
+                                  </button>
+                                )}
+                                {isOptionalImportedClass(subfield) && !subfield.allowMultiple && (
+                                  <button
+                                    type="button"
+                                    className="delete-btn"
+                                    onClick={() => updateConditionalSubfield(field, subfield.name, null)}
                                     disabled={disabled}
                                   >
                                     Remove
@@ -592,10 +643,21 @@ export function DynamicFieldInputs({ fields, values, onChange, disabled = false,
                   {field.targetEntityType && <small>{field.targetEntityType}</small>}
                 </div>
               )}
-              {(field.allowMultiple ? (values[field.name] || [emptyGroupValue(field)]) : [values[field.name] || emptyGroupValue(field)]).map((groupValue, groupIndex) => (
+              {isOptionalImportedClass(field) && !field.allowMultiple && !values[field.name] ? (
+                <button type="button" onClick={() => addSingleGroupValue(field)} className="secondary-btn" disabled={disabled}>
+                  + Add {field.label || field.name}
+                </button>
+              ) : null}
+              {(field.allowMultiple
+                ? (values[field.name] || [])
+                : (isOptionalImportedClass(field) && !values[field.name] ? [] : [values[field.name] || emptyGroupValue(field)])
+              ).map((groupValue, groupIndex) => (
                 <div key={groupIndex} className="imported-class-instance">
-                  {field.allowMultiple && (values[field.name] || []).length > 1 && (
+                  {field.inputType === 'import-class' && field.allowMultiple && (
                     <button type="button" className="delete-btn" onClick={() => removeRepeatedGroupValue(field, groupIndex)} disabled={disabled}>Remove</button>
+                  )}
+                  {!field.allowMultiple && isOptionalImportedClass(field) && (
+                    <button type="button" className="delete-btn" onClick={() => removeSingleGroupValue(field)} disabled={disabled}>Remove</button>
                   )}
                   {renderGroupSubfields({
                     field,

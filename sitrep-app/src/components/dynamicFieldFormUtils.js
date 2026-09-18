@@ -71,6 +71,10 @@ function emptyGroupValueFor(field) {
   ]));
 }
 
+function isOptionalImportedClass(field) {
+  return field?.inputType === 'import-class' && !field.required;
+}
+
 function valueHasContent(value) {
   if (Array.isArray(value)) return value.some(valueHasContent);
   if (value && typeof value === 'object') return Object.values(value).some(valueHasContent);
@@ -96,8 +100,9 @@ function normalizeGroupValueForEdit(field, value) {
   if (isRepeatedField(field)) {
     return Array.isArray(value) && value.length
       ? value.map(normalizeSingleGroupValue)
-      : [emptyGroupValueFor(field)];
+      : [];
   }
+  if (isOptionalImportedClass(field) && !value) return null;
   return value ? normalizeSingleGroupValue(value) : emptyGroupValueFor(field);
 }
 
@@ -167,6 +172,7 @@ function serializeConditionalValue(field, value, originalValue = parseStoredValu
 export function emptyValueFor(field) {
   if (field.kind === 'array') return [''];
   if (isGroupField(field)) {
+    if (isOptionalImportedClass(field)) return isRepeatedField(field) ? [] : null;
     return isRepeatedField(field) ? [emptyGroupValueFor(field)] : emptyGroupValueFor(field);
   }
   if (field.kind === 'conditional') return { selectedOption: '', values: {} };

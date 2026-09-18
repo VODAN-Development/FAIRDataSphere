@@ -123,6 +123,8 @@ export default `#graphql
     name: String!
     label: String
     value: String
+    warning: String
+    backupValue: String
     kind: String!
     datatype: String
     required: Boolean

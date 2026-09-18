@@ -45,6 +45,7 @@ import {
   entityIdFromUri,
   entityTemplateValues,
   entityUri,
+  escapeSparqlString,
   expandPrefixedName,
   fieldPatterns,
   groupSubfieldEntries,
@@ -704,7 +705,16 @@ async function clearItemReportMetadata(itemId) {
 async function deleteNestedGroupTriplesForSubject(entityType, subject) {
   // Nested groups are represented as their own resources, so entity updates must
   // remove those resources before inserting the replacement field set.
-  const deletes = Object.entries(RDF[entityType]?.fields || {})
+  const deletes = nestedGroupDeleteClauses(entityType, subject).join(";\n");
+  if (!deletes) return;
+
+  await runSparqlUpdate(`${PREFIXES}
+    ${deletes}
+  `);
+}
+
+function nestedGroupDeleteClauses(entityType, subject) {
+  return Object.entries(RDF[entityType]?.fields || {})
     .filter(([, group]) => isGroupField(group))
     .filter(([, group]) => group?.resourceMode !== "reusable")
     .map(([groupName, group]) => {
@@ -718,13 +728,7 @@ async function deleteNestedGroupTriplesForSubject(entityType, subject) {
         }`;
       }
       return `DELETE WHERE { ${sparqlTerm(nestedGroupUri(subject, groupName))} ?p ?o . }`;
-    })
-    .join(";\n");
-  if (!deletes) return;
-
-  await runSparqlUpdate(`${PREFIXES}
-    ${deletes}
-  `);
+    });
 }
 
 async function deleteNestedGroupTriples(entityType, id) {
@@ -759,6 +763,24 @@ async function loadFieldValueForSubject(subject, legacySubject, fieldName, field
     .filter(Boolean);
   if (isArrayField(field)) return values;
   return values[0];
+}
+
+async function loadFieldBackupsForSubject(subject) {
+  const result = await runSparqlQuery(`${PREFIXES}
+    SELECT ?backup WHERE {
+      ${sparqlTerm(subject)} sitrep:blankedFieldBackup ?backup .
+    }
+  `);
+  return Object.fromEntries(result.results.bindings
+    .map(binding => {
+      try {
+        return JSON.parse(binding.backup?.value || "{}");
+      } catch {
+        return null;
+      }
+    })
+    .filter(backup => backup?.fieldName)
+    .map(backup => [String(backup.fieldName).split(".")[0], backup]));
 }
 
 async function loadConditionalFieldForSubject(subject, legacySubject, fieldName, field) {
@@ -848,6 +870,7 @@ async function loadFieldsForSubject(subject, fields = {}, legacySubject = null) 
 
 async function loadReportItemCollections(item) {
   const subject = entityUri("reportItem", item.entryNumber);
+  item.__fieldBackups = await loadFieldBackupsForSubject(subject);
 
   for (const [fieldName, field] of Object.entries(RDF.reportItem.fields || {}).filter(([, field]) => isArrayField(field) && !field.options)) {
     const variable = sparqlVariableName(fieldName, field);
@@ -967,6 +990,7 @@ function mergeEntityBindingData(target, fields, binding) {
 
 async function loadEntityGroupFields(entityType, entityData) {
   const subject = termToIri(entityData.uri);
+  entityData.__fieldBackups = await loadFieldBackupsForSubject(subject);
   for (const [groupName, group] of Object.entries(RDF[entityType]?.fields || {}).filter(([, field]) => isGroupField(field))) {
     const subfields = groupSubfieldEntries(group);
     if (subfields.length === 0) continue;
@@ -1206,8 +1230,108 @@ function parseFieldValue(field, value) {
   if (field.kind === "array") return JSON.parse(value);
   if (field.kind === "group" || field.kind === "location" || field.kind === "importClass") return JSON.parse(value);
   if (field.kind === "conditional") return JSON.parse(value);
-  if (field.datatype === "xsd:integer") return parseInt(value, 10);
   return value;
+}
+
+function datatypeValidationMessage(field, value) {
+  if (value === null || value === undefined || value === "") return null;
+  const text = String(value).trim();
+  if (!field.datatype || field.objectType === "uri") return null;
+  if (field.datatype === "xsd:integer" && !/^[+-]?\d+$/.test(text)) {
+    return "The existing value is not a valid integer for this field's current datatype.";
+  }
+  if (field.datatype === "xsd:decimal" && !/^[+-]?(?:\d+|\d*\.\d+)$/.test(text)) {
+    return "The existing value is not a valid decimal number for this field's current datatype.";
+  }
+  if (field.datatype === "xsd:date") {
+    const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return "The existing value is not a valid date for this field's current datatype.";
+    const date = new Date(`${text}T00:00:00.000Z`);
+    if (
+      Number.isNaN(date.getTime())
+      || date.getUTCFullYear() !== Number(match[1])
+      || date.getUTCMonth() + 1 !== Number(match[2])
+      || date.getUTCDate() !== Number(match[3])
+    ) {
+      return "The existing value is not a valid date for this field's current datatype.";
+    }
+  }
+  if (field.datatype === "xsd:dateTime" && Number.isNaN(Date.parse(text))) {
+    return "The existing value is not a valid date/time for this field's current datatype.";
+  }
+  return null;
+}
+
+function sanitizeScalarValue(field, value, fieldPath, backups) {
+  if (Array.isArray(value)) {
+    const sanitizedValues = value
+      .map((item, index) => sanitizeScalarValue(field, item, `${fieldPath}[${index + 1}]`, backups))
+      .filter(item => item !== undefined && item !== null && item !== "");
+    return sanitizedValues.length ? sanitizedValues : undefined;
+  }
+  const warning = datatypeValidationMessage(field, value);
+  if (!warning) return value;
+  backups.push({
+    fieldName: fieldPath,
+    label: field.label || fieldPath,
+    value: String(value),
+    reason: warning,
+  });
+  return undefined;
+}
+
+function sanitizeDataForFields(fields = {}, data = {}, backups = [], parentPath = "") {
+  const nextData = { ...data };
+  for (const [fieldName, field] of Object.entries(fields || {})) {
+    if (!field || typeof field !== "object") continue;
+    const fieldPath = parentPath ? `${parentPath}.${fieldName}` : fieldName;
+    if (isGroupField(field)) {
+      const sanitizeGroup = groupData => {
+        const sanitizedGroup = sanitizeDataForFields(Object.fromEntries(groupSubfieldEntries(field)), groupData || {}, backups, fieldPath);
+        if (field.targetEntityType && sanitizedGroup.id !== undefined) {
+          const idField = RDF[field.targetEntityType]?.fields?.[entityIdField(field.targetEntityType)] || { datatype: "xsd:integer", label: "ID" };
+          const sanitizedId = sanitizeScalarValue(idField, sanitizedGroup.id, `${fieldPath}.id`, backups);
+          if (sanitizedId === undefined) {
+            delete sanitizedGroup.id;
+          } else {
+            sanitizedGroup.id = sanitizedId;
+          }
+        }
+        return sanitizedGroup;
+      };
+      if (Array.isArray(nextData[fieldName])) {
+        const groups = nextData[fieldName]
+          .map(sanitizeGroup)
+          .filter(fieldHasInputValue);
+        nextData[fieldName] = groups.length ? groups : undefined;
+      } else if (nextData[fieldName]) {
+        const group = sanitizeGroup(nextData[fieldName]);
+        nextData[fieldName] = fieldHasInputValue(group) ? group : undefined;
+      }
+      continue;
+    }
+    if (field.options) {
+      const conditionalValue = nextData[fieldName];
+      const selectedOption = typeof conditionalValue === "object" ? conditionalValue?.selectedOption : conditionalValue;
+      const option = field.options?.[selectedOption];
+      if (option && typeof conditionalValue === "object") {
+        nextData[fieldName] = {
+          ...conditionalValue,
+          values: sanitizeDataForFields(option.fields || {}, conditionalValue.values || {}, backups, fieldPath),
+        };
+      }
+      continue;
+    }
+    nextData[fieldName] = sanitizeScalarValue(field, nextData[fieldName], fieldPath, backups);
+  }
+  return nextData;
+}
+
+function backupTriples(subject, backups = []) {
+  return backups.map(backup => triple(subject, "sitrep:blankedFieldBackup", JSON.stringify({
+    ...backup,
+    blankedAt: new Date().toISOString(),
+  }), { datatype: "xsd:string" })).join("");
 }
 
 function dataFromFieldValues(entityType, fieldValues) {
@@ -1272,6 +1396,7 @@ function encryptSourceFieldsInStructure(structure) {
 function fieldValuesForEntity(entityType, entity) {
   // The frontend expects a uniform array of field payloads for reports, items,
   // and custom RDF entities.
+  const backups = entity.__fieldBackups || {};
   return editableFieldEntries(entityType).map(field => ({
     name: field.name,
     label: field.label || field.name,
@@ -1283,6 +1408,8 @@ function fieldValuesForEntity(entityType, entity) {
     subfields: field.subfields || [],
     options: field.options || [],
     encrypted: field.encrypted,
+    warning: backups[field.name]?.reason || null,
+    backupValue: backups[field.name]?.value || null,
     value: valueForFieldPayload(field, entity[field.name]),
   }));
 }
@@ -2400,16 +2527,20 @@ const resolvers = {
       const entryNumber = await nextEntityId("reportItem");
 
       const now = new Date().toISOString();
+      const backups = [];
       const item = await allocateCreatedEntityInputs("reportItem", {
-        ...dataFromFieldValues("reportItem", fieldValues),
+        ...sanitizeDataForFields(RDF.reportItem.fields || {}, dataFromFieldValues("reportItem", fieldValues), backups),
         entryNumber,
         createdAt: now,
         updatedAt: now,
       });
+      const subject = entityUri("reportItem", entryNumber);
+      item.__fieldBackups = Object.fromEntries(backups.map(backup => [String(backup.fieldName).split(".")[0], backup]));
 
       await syncEquivalentClassTriples();
       await runSparqlUpdate(`${PREFIXES} INSERT DATA {
         ${reportItemTriples(item)}
+        ${backupTriples(subject, backups)}
       }`);
       return item;
       });
@@ -2427,24 +2558,27 @@ const resolvers = {
       if (existing.results.bindings.length === 0) throw new Error("Report item not found in this organisation.");
       const createdAt = existing.results.bindings[0]?.createdAt.value || new Date().toISOString();
 
-      await deleteNestedGroupTriples("reportItem", id);
-      await runSparqlUpdate(`${PREFIXES}
-        DELETE WHERE {
-          ${subject} ?p ?o .
-        }
-      `);
-
+      const backups = [];
       const item = await allocateCreatedEntityInputs("reportItem", {
         entryNumber: parseInt(id, 10),
-        ...dataFromFieldValues("reportItem", fieldValues),
+        ...sanitizeDataForFields(RDF.reportItem.fields || {}, dataFromFieldValues("reportItem", fieldValues), backups),
         createdAt,
         updatedAt: new Date().toISOString(),
       });
+      item.__fieldBackups = Object.fromEntries(backups.map(backup => [String(backup.fieldName).split(".")[0], backup]));
 
       await syncEquivalentClassTriples();
-      await runSparqlUpdate(`${PREFIXES} INSERT DATA {
-        ${reportItemTriples(item)}
-      }`);
+      const nestedDeletes = nestedGroupDeleteClauses("reportItem", subject);
+      await runSparqlUpdate(`${PREFIXES}
+        ${nestedDeletes.length ? `${nestedDeletes.join(";\n")};` : ""}
+        DELETE WHERE {
+          ${subject} ?p ?o .
+        };
+        INSERT DATA {
+          ${reportItemTriples(item)}
+          ${backupTriples(subject, backups)}
+        }
+      `);
       return item;
       });
     },
@@ -2466,19 +2600,23 @@ const resolvers = {
       return withOrganisationRepository(organisationId, async () => {
       const id = await nextEntityId("report");
       const now = new Date().toISOString();
+      const backups = [];
+      const subject = entityUri("report", id);
 
       const report = {
-        ...dataFromFieldValues("report", fieldValues),
+        ...sanitizeDataForFields(RDF.report.fields || {}, dataFromFieldValues("report", fieldValues), backups),
         id,
         reportNumber: id,
         selectedItemIds: selectedItemIds || [],
         createdAt: now,
         updatedAt: now,
       };
+      report.__fieldBackups = Object.fromEntries(backups.map(backup => [String(backup.fieldName).split(".")[0], backup]));
 
       await syncEquivalentClassTriples();
       await runSparqlUpdate(`${PREFIXES} INSERT DATA {
         ${reportTriples(report)}
+        ${backupTriples(subject, backups)}
       }`);
 
       for (const itemId of selectedItemIds || []) {
@@ -2497,11 +2635,6 @@ const resolvers = {
       const subject = entityUri("report", id);
       const existingReport = await resolvers.Query.report(null, { id, organisationId }, context);
       const nextSelectedItemIds = selectedItemIds || existingReport?.selectedItemIds || [];
-      if (existingReport) {
-        for (const itemId of existingReport.selectedItemIds) {
-          await clearItemReportMetadata(itemId);
-        }
-      }
 
       const existing = await runSparqlQuery(`${PREFIXES}
         SELECT ?createdAt WHERE {
@@ -2511,27 +2644,35 @@ const resolvers = {
       if (existing.results.bindings.length === 0) throw new Error("Report not found in this organisation.");
       const createdAt = existing.results.bindings[0]?.createdAt.value || new Date().toISOString();
 
-      await deleteNestedGroupTriples("report", id);
-      await runSparqlUpdate(`${PREFIXES}
-        DELETE WHERE {
-          ${subject} ?p ?o .
-        }
-      `);
-
+      const backups = [];
       const report = {
-        ...dataFromFieldValues("report", fieldValues),
+        ...sanitizeDataForFields(RDF.report.fields || {}, dataFromFieldValues("report", fieldValues), backups),
         id: parseInt(id, 10),
         reportNumber: parseInt(id, 10),
         selectedItemIds: nextSelectedItemIds,
         createdAt,
         updatedAt: new Date().toISOString(),
       };
+      report.__fieldBackups = Object.fromEntries(backups.map(backup => [String(backup.fieldName).split(".")[0], backup]));
 
       await syncEquivalentClassTriples();
-      await runSparqlUpdate(`${PREFIXES} INSERT DATA {
-        ${reportTriples(report)}
-      }`);
+      const nestedDeletes = nestedGroupDeleteClauses("report", subject);
+      await runSparqlUpdate(`${PREFIXES}
+        ${nestedDeletes.length ? `${nestedDeletes.join(";\n")};` : ""}
+        DELETE WHERE {
+          ${subject} ?p ?o .
+        };
+        INSERT DATA {
+          ${reportTriples(report)}
+          ${backupTriples(subject, backups)}
+        }
+      `);
 
+      if (existingReport) {
+        for (const itemId of existingReport.selectedItemIds) {
+          await clearItemReportMetadata(itemId);
+        }
+      }
       for (const itemId of nextSelectedItemIds) {
         await setItemReportMetadata(itemId, report);
       }
@@ -2724,22 +2865,28 @@ const resolvers = {
 
       const id = await nextEntityId(entityType);
       const idFieldName = entityIdField(entityType);
+      const backups = [];
       const data = await allocateCreatedEntityInputs(entityType, {
-        ...dataFromFieldValues(entityType, fieldValues),
+        ...sanitizeDataForFields(RDF[entityType]?.fields || {}, dataFromFieldValues(entityType, fieldValues), backups),
         [idFieldName]: id,
         id,
       });
       const subject = entityUri(entityType, id);
       const triples = rdfTypeTriple(subject, RDF.classes[entityType])
         + triplesFromFields(subject, RDF[entityType]?.fields || {}, data)
-        + triplesFromNestedGroups(subject, RDF[entityType]?.fields || {}, data);
+        + triplesFromNestedGroups(subject, RDF[entityType]?.fields || {}, data)
+        + backupTriples(subject, backups);
 
       await syncEquivalentClassTriples();
       await runSparqlUpdate(`${PREFIXES} INSERT DATA {
         ${triples}
       }`);
 
-      return rdfEntityFromObject(entityType, { ...data, uri: expandPrefixedName(subject) });
+      return rdfEntityFromObject(entityType, {
+        ...data,
+        __fieldBackups: Object.fromEntries(backups.map(backup => [String(backup.fieldName).split(".")[0], backup])),
+        uri: expandPrefixedName(subject),
+      });
       });
     },
 
@@ -2777,17 +2924,20 @@ const resolvers = {
 
       const subject = subjectFromEntityIdentifier(entityType, id, uri);
       const idFieldName = entityIdField(entityType);
+      const backups = [];
       const data = {
-        ...dataFromFieldValues(entityType, fieldValues),
+        ...sanitizeDataForFields(RDF[entityType]?.fields || {}, dataFromFieldValues(entityType, fieldValues), backups),
         [idFieldName]: id,
         id,
       };
       const triples = rdfTypeTriple(subject, RDF.classes[entityType])
         + triplesFromFields(subject, RDF[entityType]?.fields || {}, data)
-        + triplesFromNestedGroups(subject, RDF[entityType]?.fields || {}, data);
+        + triplesFromNestedGroups(subject, RDF[entityType]?.fields || {}, data)
+        + backupTriples(subject, backups);
 
-      await deleteNestedGroupTriplesForSubject(entityType, subject);
+      const nestedDeletes = nestedGroupDeleteClauses(entityType, subject);
       await runSparqlUpdate(`${PREFIXES}
+        ${nestedDeletes.length ? `${nestedDeletes.join(";\n")};` : ""}
         DELETE WHERE {
           ${subject} ?p ?o .
         };
@@ -2796,7 +2946,11 @@ const resolvers = {
         }
       `);
 
-      return rdfEntityFromObject(entityType, { ...data, uri: uri || expandPrefixedName(entityUri(entityType, id)) });
+      return rdfEntityFromObject(entityType, {
+        ...data,
+        __fieldBackups: Object.fromEntries(backups.map(backup => [String(backup.fieldName).split(".")[0], backup])),
+        uri: uri || expandPrefixedName(entityUri(entityType, id)),
+      });
       });
     },
   },
