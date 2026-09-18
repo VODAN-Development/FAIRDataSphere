@@ -53,6 +53,7 @@ import {
   isArrayField,
   isGroupField,
   literal,
+  nestedGroupSubject,
   nestedGroupUri,
   objectTerm,
   objectFromBinding,
@@ -713,22 +714,68 @@ async function deleteNestedGroupTriplesForSubject(entityType, subject) {
   `);
 }
 
-function nestedGroupDeleteClauses(entityType, subject) {
-  return Object.entries(RDF[entityType]?.fields || {})
+function nestedGroupDeleteClauses(entityType, subject, preservedSubjects = new Set()) {
+  return nestedGroupDeleteClausesForFields(RDF[entityType]?.fields || {}, subject, entityType, [], preservedSubjects);
+}
+
+function sparqlTermKey(term) {
+  return sparqlTerm(term);
+}
+
+function removeOnlyPreserveFilter(groupSubject, preservedSubjects = new Set()) {
+  if (!String(groupSubject).startsWith("?") || preservedSubjects.size === 0) return "";
+  return `FILTER(${groupSubject} NOT IN (${Array.from(preservedSubjects).join(" ")}))`;
+}
+
+function nestedGroupDeleteClausesForFields(fields = {}, parentSubject, path, parentPatterns = [], preservedSubjects = new Set()) {
+  const conditionalClauses = Object.entries(fields || {})
+    .flatMap(([fieldName, field]) => Object.entries(field?.options || {})
+      .flatMap(([optionName, option]) => nestedGroupDeleteClausesForFields(
+        option.fields || {},
+        parentSubject,
+        `${path}_${fieldName}_${optionName}`,
+        parentPatterns,
+        preservedSubjects
+      )));
+
+  const groupClauses = Object.entries(fields || {})
     .filter(([, group]) => isGroupField(group))
     .filter(([, group]) => group?.resourceMode !== "reusable")
-    .map(([groupName, group]) => {
-      if (group.targetEntityType && group.predicate) {
-        return `DELETE {
-          ?groupSubject ?p ?o .
-        }
-        WHERE {
-          ${sparqlTerm(subject)} ${sparqlTerm(group.predicate)} ?groupSubject .
-          ?groupSubject ?p ?o .
-        }`;
+    .flatMap(([groupName, group]) => {
+      const groupSubject = group.predicate
+        ? `?${sparqlVariableName(`${path}_${groupName}_subject`)}`
+        : nestedGroupUri(parentSubject, groupName);
+      if (!groupSubject || (String(groupSubject).startsWith("?") && !group.predicate)) return [];
+      if (!String(groupSubject).startsWith("?") && preservedSubjects.has(sparqlTermKey(groupSubject))) return [];
+
+      const linkPattern = group.predicate
+        ? `${sparqlTerm(parentSubject)} ${sparqlTerm(group.predicate)} ${groupSubject} .`
+        : "";
+      const preserveFilter = removeOnlyPreserveFilter(groupSubject, preservedSubjects);
+      const nextParentPatterns = [ ...parentPatterns, linkPattern, preserveFilter ].filter(Boolean);
+      const childClauses = nestedGroupDeleteClausesForFields(
+        Object.fromEntries(groupSubfieldEntries(group)),
+        groupSubject,
+        `${path}_${groupName}`,
+        nextParentPatterns,
+        preservedSubjects
+      );
+      const wherePatterns = [
+        ...parentPatterns,
+        linkPattern,
+        preserveFilter,
+        `${sparqlTerm(groupSubject)} ?p ?o .`,
+      ].filter(Boolean);
+      const groupDelete = `DELETE {
+        ${sparqlTerm(groupSubject)} ?p ?o .
       }
-      return `DELETE WHERE { ${sparqlTerm(nestedGroupUri(subject, groupName))} ?p ?o . }`;
+      WHERE {
+        ${wherePatterns.join("\n")}
+      }`;
+      return [...childClauses, groupDelete];
     });
+
+  return [...conditionalClauses, ...groupClauses];
 }
 
 async function deleteNestedGroupTriples(entityType, id) {
@@ -795,7 +842,7 @@ async function loadConditionalFieldForSubject(subject, legacySubject, fieldName,
 }
 
 async function loadGroupSubjects(parentSubject, groupName, group) {
-  if (!group.predicate) return [nestedGroupUri(parentSubject, groupName)];
+  if (!group.predicate) return [{ subject: nestedGroupUri(parentSubject, groupName), linked: true }];
   const result = await runSparqlQuery(`${PREFIXES}
     SELECT ?groupSubject WHERE {
       ${sparqlTerm(parentSubject)} ${sparqlTerm(group.predicate)} ?groupSubject .
@@ -804,8 +851,10 @@ async function loadGroupSubjects(parentSubject, groupName, group) {
   const subjects = result.results.bindings
     .map(binding => binding.groupSubject?.value)
     .filter(Boolean)
-    .map(value => termToIri(value));
-  return subjects.length > 0 ? subjects : [nestedGroupUri(parentSubject, groupName)];
+    .map(value => ({ subject: termToIri(value), linked: true }));
+  return subjects.length > 0
+    ? subjects
+    : [{ subject: nestedGroupUri(parentSubject, groupName), linked: false }];
 }
 
 async function loadLinkedGroupId(group, groupSubject) {
@@ -834,9 +883,10 @@ async function loadGroupValueForSubject(parentSubject, groupName, group) {
   const groupValues = [];
   const groupFields = Object.fromEntries(groupSubfieldEntries(group));
 
-  for (const groupSubject of groupSubjects) {
+  for (const { subject: groupSubject, linked } of groupSubjects) {
+    if (!linked && group.targetEntityType && group.predicate) continue;
     const groupData = await loadFieldsForSubject(groupSubject, groupFields, parentSubject);
-    const id = await loadLinkedGroupId(group, groupSubject);
+    const id = linked ? await loadLinkedGroupId(group, groupSubject) : undefined;
     if (id !== undefined) groupData.id = id;
     if (fieldHasInputValue(groupData)) groupValues.push(groupData);
   }
@@ -955,8 +1005,53 @@ function rdfEntityFromObject(entityType, entity) {
     id: String(id),
     uri,
     className: RDF.classes?.[entityType] || null,
+    importedIn: entity.__importedIn || [],
     fieldValues: fieldValuesForEntity(entityType, entity),
   };
+}
+
+function entityTypeForClassName(className) {
+  return Object.entries(RDF.classes || {}).find(([, candidateClassName]) => (
+    candidateClassName === className
+    || expandPrefixedName(candidateClassName) === className
+  ))?.[0];
+}
+
+function labelForEntityReference(entityType, id) {
+  if (entityType === "reportItem") return `Report item ${id}`;
+  if (entityType === "report") return `Report ${id}`;
+  return `${entityType} ${id}`;
+}
+
+async function loadImportedInReferences(subject, ownEntityType = null) {
+  const result = await runSparqlQuery(`${PREFIXES}
+    SELECT ?parent ?predicate ?className WHERE {
+      ?parent ?predicate ${sparqlTerm(subject)} .
+      OPTIONAL { ?parent rdf:type ?className . }
+      FILTER(?parent != ${sparqlTerm(subject)})
+    }
+    ORDER BY STR(?parent)
+  `);
+  const referencesByKey = new Map();
+
+  for (const binding of result.results.bindings) {
+    const parentUri = binding.parent?.value;
+    if (!parentUri) continue;
+    const parentEntityType = entityTypeForClassName(binding.className?.value);
+    if (!parentEntityType || parentEntityType === ownEntityType) continue;
+    const id = idFromEntityBinding(parentEntityType, parentUri, { uri: parentUri });
+    const key = `${parentEntityType}|${parentUri}|${binding.predicate?.value || ""}`;
+    referencesByKey.set(key, {
+      entityType: parentEntityType,
+      id: String(id),
+      uri: parentUri,
+      className: RDF.classes?.[parentEntityType] || null,
+      predicate: binding.predicate?.value || null,
+      label: labelForEntityReference(parentEntityType, id),
+    });
+  }
+
+  return Array.from(referencesByKey.values());
 }
 
 function idFromEntityBinding(entityType, uri, entity) {
@@ -1076,7 +1171,9 @@ async function rdfEntitiesForType(entityType, organisationId, context, paginatio
 
   const entityDataList = [];
   for (const entityData of entitiesByUri.values()) {
-    entityDataList.push(await loadEntityGroupFields(entityType, entityData));
+    const loadedEntityData = await loadEntityGroupFields(entityType, entityData);
+    loadedEntityData.__importedIn = await loadImportedInReferences(termToIri(loadedEntityData.uri), entityType);
+    entityDataList.push(loadedEntityData);
   }
 
   return entityDataList.map(entityData => {
@@ -1324,6 +1421,56 @@ function sanitizeDataForFields(fields = {}, data = {}, backups = [], parentPath 
     }
     nextData[fieldName] = sanitizeScalarValue(field, nextData[fieldName], fieldPath, backups);
   }
+  return nextData;
+}
+
+function isRemoveOnlyGroup(value) {
+  return !!(value && typeof value === "object" && value.__removeOnly);
+}
+
+function stripRemoveOnlyGroups(fields = {}, data = {}, parentSubject, preservedSubjects = new Set()) {
+  const nextData = { ...data };
+
+  for (const [fieldName, field] of Object.entries(fields || {})) {
+    if (!field || typeof field !== "object") continue;
+    if (isGroupField(field)) {
+      const stripGroup = (groupData, groupIndex = 0) => {
+        const groupSubjectName = field.allowMultiple ? `${fieldName}_${groupIndex + 1}` : fieldName;
+        if (isRemoveOnlyGroup(groupData)) {
+          if (field.targetEntityType && groupData.id !== undefined) {
+            preservedSubjects.add(sparqlTermKey(nestedGroupSubject(parentSubject, groupSubjectName, field, groupData)));
+          }
+          return undefined;
+        }
+        if (!groupData || typeof groupData !== "object") return groupData;
+        const groupSubject = nestedGroupSubject(parentSubject, groupSubjectName, field, groupData);
+        return stripRemoveOnlyGroups(Object.fromEntries(groupSubfieldEntries(field)), groupData, groupSubject, preservedSubjects);
+      };
+
+      if (Array.isArray(nextData[fieldName])) {
+        const strippedGroups = nextData[fieldName]
+          .map((groupData, groupIndex) => stripGroup(groupData, groupIndex))
+          .filter(groupData => groupData !== undefined);
+        nextData[fieldName] = strippedGroups.length ? strippedGroups : undefined;
+      } else {
+        nextData[fieldName] = stripGroup(nextData[fieldName]);
+      }
+      continue;
+    }
+
+    if (field.options) {
+      const conditionalValue = nextData[fieldName];
+      const selectedOption = typeof conditionalValue === "object" ? conditionalValue?.selectedOption : conditionalValue;
+      const option = field.options?.[selectedOption];
+      if (option && typeof conditionalValue === "object") {
+        nextData[fieldName] = {
+          ...conditionalValue,
+          values: stripRemoveOnlyGroups(option.fields || {}, conditionalValue.values || {}, parentSubject, preservedSubjects),
+        };
+      }
+    }
+  }
+
   return nextData;
 }
 
@@ -2559,16 +2706,23 @@ const resolvers = {
       const createdAt = existing.results.bindings[0]?.createdAt.value || new Date().toISOString();
 
       const backups = [];
+      const preservedSubjects = new Set();
+      const fieldData = stripRemoveOnlyGroups(
+        RDF.reportItem.fields || {},
+        dataFromFieldValues("reportItem", fieldValues),
+        subject,
+        preservedSubjects
+      );
       const item = await allocateCreatedEntityInputs("reportItem", {
+        ...sanitizeDataForFields(RDF.reportItem.fields || {}, fieldData, backups),
         entryNumber: parseInt(id, 10),
-        ...sanitizeDataForFields(RDF.reportItem.fields || {}, dataFromFieldValues("reportItem", fieldValues), backups),
         createdAt,
         updatedAt: new Date().toISOString(),
       });
       item.__fieldBackups = Object.fromEntries(backups.map(backup => [String(backup.fieldName).split(".")[0], backup]));
 
       await syncEquivalentClassTriples();
-      const nestedDeletes = nestedGroupDeleteClauses("reportItem", subject);
+      const nestedDeletes = nestedGroupDeleteClauses("reportItem", subject, preservedSubjects);
       await runSparqlUpdate(`${PREFIXES}
         ${nestedDeletes.length ? `${nestedDeletes.join(";\n")};` : ""}
         DELETE WHERE {
@@ -2645,8 +2799,15 @@ const resolvers = {
       const createdAt = existing.results.bindings[0]?.createdAt.value || new Date().toISOString();
 
       const backups = [];
+      const preservedSubjects = new Set();
+      const fieldData = stripRemoveOnlyGroups(
+        RDF.report.fields || {},
+        dataFromFieldValues("report", fieldValues),
+        subject,
+        preservedSubjects
+      );
       const report = {
-        ...sanitizeDataForFields(RDF.report.fields || {}, dataFromFieldValues("report", fieldValues), backups),
+        ...sanitizeDataForFields(RDF.report.fields || {}, fieldData, backups),
         id: parseInt(id, 10),
         reportNumber: parseInt(id, 10),
         selectedItemIds: nextSelectedItemIds,
@@ -2656,7 +2817,7 @@ const resolvers = {
       report.__fieldBackups = Object.fromEntries(backups.map(backup => [String(backup.fieldName).split(".")[0], backup]));
 
       await syncEquivalentClassTriples();
-      const nestedDeletes = nestedGroupDeleteClauses("report", subject);
+      const nestedDeletes = nestedGroupDeleteClauses("report", subject, preservedSubjects);
       await runSparqlUpdate(`${PREFIXES}
         ${nestedDeletes.length ? `${nestedDeletes.join(";\n")};` : ""}
         DELETE WHERE {
@@ -2885,6 +3046,7 @@ const resolvers = {
       return rdfEntityFromObject(entityType, {
         ...data,
         __fieldBackups: Object.fromEntries(backups.map(backup => [String(backup.fieldName).split(".")[0], backup])),
+        __importedIn: await loadImportedInReferences(subject, entityType),
         uri: expandPrefixedName(subject),
       });
       });
@@ -2925,8 +3087,15 @@ const resolvers = {
       const subject = subjectFromEntityIdentifier(entityType, id, uri);
       const idFieldName = entityIdField(entityType);
       const backups = [];
+      const preservedSubjects = new Set();
+      const fieldData = stripRemoveOnlyGroups(
+        RDF[entityType]?.fields || {},
+        dataFromFieldValues(entityType, fieldValues),
+        subject,
+        preservedSubjects
+      );
       const data = {
-        ...sanitizeDataForFields(RDF[entityType]?.fields || {}, dataFromFieldValues(entityType, fieldValues), backups),
+        ...sanitizeDataForFields(RDF[entityType]?.fields || {}, fieldData, backups),
         [idFieldName]: id,
         id,
       };
@@ -2935,7 +3104,7 @@ const resolvers = {
         + triplesFromNestedGroups(subject, RDF[entityType]?.fields || {}, data)
         + backupTriples(subject, backups);
 
-      const nestedDeletes = nestedGroupDeleteClauses(entityType, subject);
+      const nestedDeletes = nestedGroupDeleteClauses(entityType, subject, preservedSubjects);
       await runSparqlUpdate(`${PREFIXES}
         ${nestedDeletes.length ? `${nestedDeletes.join(";\n")};` : ""}
         DELETE WHERE {
@@ -2949,6 +3118,7 @@ const resolvers = {
       return rdfEntityFromObject(entityType, {
         ...data,
         __fieldBackups: Object.fromEntries(backups.map(backup => [String(backup.fieldName).split(".")[0], backup])),
+        __importedIn: await loadImportedInReferences(subject, entityType),
         uri: uri || expandPrefixedName(entityUri(entityType, id)),
       });
       });

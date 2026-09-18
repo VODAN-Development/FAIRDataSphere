@@ -257,7 +257,17 @@ export default `#graphql
     id: ID!
     uri: String!
     className: String
+    importedIn: [RdfEntityReference!]!
     fieldValues: [RdfFieldValue!]!
+  }
+
+  type RdfEntityReference {
+    entityType: String!
+    id: ID!
+    uri: String!
+    className: String
+    predicate: String
+    label: String
   }
 
   type Query {

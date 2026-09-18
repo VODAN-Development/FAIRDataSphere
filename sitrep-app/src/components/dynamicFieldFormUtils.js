@@ -86,23 +86,32 @@ function groupHasValue(groupValue) {
 }
 
 function normalizeGroupValueForEdit(field, value) {
-  const normalizeSingleGroupValue = (groupValue = {}) => Object.fromEntries(
-    Object.entries(groupValue).map(([name, subfieldValue]) => {
+  const normalizeSingleGroupValue = (groupValue = {}) => {
+    const normalizedValue = Object.fromEntries(Object.entries(groupValue).filter(([name]) => name !== 'id').map(([name, subfieldValue]) => {
       const subfield = (field.subfields || []).find(candidate => candidate.name === name);
       if (isGroupField(subfield || {})) return [name, normalizeGroupValueForEdit(subfield, subfieldValue)];
       if (subfield?.kind === 'conditional') return [name, normalizeConditionalValueForEdit(subfield, subfieldValue)];
       if (isUriField(subfield)) return [name, compactUriValue(subfieldValue)];
       if (isListField(subfield || {})) return [name, subfieldValue || ['']];
       return [name, subfieldValue];
-    })
-  );
+    }));
+    if (groupHasValue(normalizedValue) && groupValue.id !== undefined) {
+      return { ...normalizedValue, id: groupValue.id };
+    }
+    return normalizedValue;
+  };
 
   if (isRepeatedField(field)) {
-    return Array.isArray(value) && value.length
-      ? value.map(normalizeSingleGroupValue)
+    const normalizedValues = Array.isArray(value) && value.length
+      ? value.map(normalizeSingleGroupValue).filter(groupHasValue)
       : [];
+    return normalizedValues;
   }
   if (isOptionalImportedClass(field) && !value) return null;
+  if (isOptionalImportedClass(field)) {
+    const normalizedValue = normalizeSingleGroupValue(value || {});
+    return groupHasValue(normalizedValue) ? normalizedValue : null;
+  }
   return value ? normalizeSingleGroupValue(value) : emptyGroupValueFor(field);
 }
 

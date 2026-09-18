@@ -73,6 +73,14 @@ const GET_RDF_ENTITIES = gql`
       id
       uri
       className
+      importedIn {
+        entityType
+        id
+        uri
+        className
+        predicate
+        label
+      }
       fieldValues {
         ...RdfFieldValueFields
       }
@@ -223,6 +231,12 @@ function compareSortValues(left, right, direction) {
   const rightText = sortValueText(right);
   if (leftText === rightText) return 0;
   return leftText.localeCompare(rightText, undefined, { numeric: true, sensitivity: 'base' }) * (direction === 'asc' ? 1 : -1);
+}
+
+function importedInText(importedIn = []) {
+  return (importedIn || [])
+    .map(reference => reference.label || `${titleForEntity(reference.entityType)} #${reference.id}`)
+    .join(', ');
 }
 
 function blankedFieldNotice(fieldValues = []) {
@@ -381,6 +395,9 @@ export default function Items() {
   useEffect(() => {
     setItemPageIndex(0);
     setEntityPageIndex(0);
+    setEditingKey('');
+    setEditValues({});
+    setFieldErrors({});
   }, [selectedEntityType, activeOrganisationId]);
 
   useEffect(() => {
@@ -529,7 +546,11 @@ export default function Items() {
   };
 
   const handleDeleteEntity = async (entity) => {
-    const confirmed = await confirmAction(`Delete ${titleForEntity(entity.entityType).toLowerCase()} "${entityTitle(entity)}"? This cannot be undone.`, {
+    const importedIn = importedInText(entity.importedIn);
+    const impactText = importedIn
+      ? ` This will also remove it from: ${importedIn}.`
+      : '';
+    const confirmed = await confirmAction(`Delete ${titleForEntity(entity.entityType).toLowerCase()} "${entityTitle(entity)}"?${impactText} This cannot be undone.`, {
       confirmLabel: 'Delete instance',
     });
     if (!confirmed) return;
@@ -538,6 +559,8 @@ export default function Items() {
       setActionError('');
       await deleteRdfEntity({ variables: { entityType: entity.entityType, id: entity.id, uri: entity.uri, organisationId: activeOrganisationId } });
       await refetchEntities();
+      await refetchItems();
+      notifyReportsUpdated();
       showNotice(`${titleForEntity(entity.entityType)} deleted.`);
     } catch (err) {
       setActionError(err.message);
@@ -832,6 +855,11 @@ export default function Items() {
                             <div className="event-detail-row">
                               <strong>URI:</strong> {entity.uri}
                             </div>
+                            {(entity.importedIn || []).length > 0 && (
+                              <div className="event-detail-row">
+                                <strong>Imported in:</strong> {importedInText(entity.importedIn)}
+                              </div>
+                            )}
                             {entity.fieldValues.map(field => {
                               const value = displayValue(field);
                               if (!value && !field.backupValue) return null;

@@ -1769,11 +1769,35 @@ nav a button {
 .imported-class-input {
   display: grid;
   gap: 0.75rem;
+  margin: 0.75rem 0;
   padding: 0.75rem;
   border: 1px solid var(--color-border-nested);
   border-left: 4px solid var(--color-primary);
   border-radius: 6px;
   background-color: var(--color-surface-nested);
+}
+
+.form-group > .imported-class-input {
+  margin-top: 0.5rem;
+}
+
+.imported-class-instance {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.imported-class-instance > .secondary-btn,
+.imported-class-instance > .delete-btn {
+  display: inline-flex;
+  justify-content: center;
+  justify-self: start;
+  width: auto;
+  min-width: 0;
+}
+
+.imported-class-instance > .secondary-btn + .delete-btn,
+.imported-class-instance > .delete-btn + .secondary-btn {
+  margin-left: 0.5rem;
 }
 
 .imported-class-heading {
